@@ -1821,7 +1821,7 @@ class Dataset_Util(Link_Util):
         return True
     
     def create_datasets_on_all_collections(self, bucket_util, cbas_name_cardinality=1, kv_name_cardinality=1, 
-                                           remote_datasets=False, max_thread_count=10):
+                                           remote_datasets=False, max_thread_count=10, creation_methods=None):
         """
         Create datasets on every collection across all the buckets and scopes.
         :param bucket_util obj, bucket_util obj to perform operations on KV bucket.
@@ -1829,27 +1829,23 @@ class Dataset_Util(Link_Util):
         :param kv_name_cardinality int, no of parts in KV entity name. Valid values 1 or 3. 
         :param remote_datasets bool, if True create remote datasets using remote links.
         :param max_thread_count int, max no. of parallel threads to execute.
+        :param creation_methods list, support values are "cbas_collection","cbas_dataset","enable_cbas_from_kv"
         """
         self.log.info("Creating Datasets on all KV collections")
         jobs = Queue()
         results = list()
-        
-        creation_methods = ["cbas_collection","cbas_dataset","enable_cbas_from_kv"]
-        
+        if not creation_methods:
+            creation_methods = ["cbas_collection","cbas_dataset","enable_cbas_from_kv"]
         if remote_datasets:
             remote_link_objs = self.list_all_link_objs("couchbase")
             creation_methods.remove("enable_cbas_from_kv")
-        
         def dataset_creation(bucket, scope, collection):
             creation_method = random.choice(creation_methods)
-                        
             if remote_datasets:
                 link_name = random.choice(remote_link_objs).full_name
             else:
                 link_name = None
-            
             name = self.generate_name(name_cardinality=1)
-            
             if creation_method == "enable_cbas_from_kv":
                 enabled_from_KV = True
                 dataverse = Dataverse(bucket.name + "." + scope.name)
@@ -1862,9 +1858,7 @@ class Dataset_Util(Link_Util):
                     self.dataverses[dataverse.name] = dataverse
                 else:
                     dataverse = self.get_dataverse_obj("Default")
-                                    
             num_of_items = collection.num_items
-                
             if creation_method == "cbas_collection":
                 dataset_obj = CBAS_Collection(
                     name=name, dataverse_name=dataverse.name,link_name=link_name, 
@@ -1877,10 +1871,8 @@ class Dataset_Util(Link_Util):
                     dataset_source="internal", dataset_properties={},
                     bucket=bucket, scope=scope, collection=collection, 
                     enabled_from_KV=enabled_from_KV, num_of_items=num_of_items)
-            
             jobs.put(dataset_obj)
             dataverse.datasets[dataset_obj.full_name] = dataset_obj
-        
         for bucket in bucket_util.buckets:
             if kv_name_cardinality > 1:
                 for scope in bucket_util.get_active_scopes(bucket):
@@ -1889,8 +1881,6 @@ class Dataset_Util(Link_Util):
             else:
                 scope = bucket_util.get_scope_obj(bucket, "_default")
                 dataset_creation(bucket, scope, bucket_util.get_collection_obj(scope, "_default"))
-                
-            
         def consumer_func(dataset):
             dataverse_name = dataset.dataverse_name
             if dataverse_name == "Default":
@@ -1927,10 +1917,8 @@ class Dataset_Util(Link_Util):
                         dataset.name, dataset.get_fully_qualified_kv_entity_name(1), None, 
                         False, False, None, dataset.link_name, None, False, None, None, 
                         None, 120, 120, analytics_collection)
-        
         self.run_jobs_in_parallel(consumer_func, jobs, results, max_thread_count, 
                                   async_run=False, consume_from_queue_func=None)
-            
         return all(results)
     
     def create_dataset_obj(self, bucket_util, dataset_cardinality=1, bucket_cardinality=1,

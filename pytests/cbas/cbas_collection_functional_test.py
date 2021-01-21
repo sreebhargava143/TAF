@@ -14,6 +14,10 @@ from security.rbac_base import RbacBase
 from Queue import Queue
 from CbasLib.cbas_entity import Dataverse,CBAS_Scope,Link,Dataset,CBAS_Collection,Synonym,CBAS_Index
 from CbasLib.CBASOperations import CBASHelper
+from sdk_exceptions import SDKException
+from collections_helper.collections_spec_constants import MetaCrudParams
+from concurrent.futures import ThreadPoolExecutor
+from math import ceil, floor
 
 
 class CBASDataverseAndScopes(CBASBaseTest):
@@ -45,7 +49,7 @@ class CBASDataverseAndScopes(CBASBaseTest):
         self.log.info("TEARDOWN has started")
         self.log.info("================================================================")
         
-        super(CBASDataverseAndScopes, self).tearDown()
+#         super(CBASDataverseAndScopes, self).tearDown()
         
         self.log.info("================================================================")
         self.log.info("Teardown has finished")
@@ -266,7 +270,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         self.log.info("================================================================")
         self.sleep(15)
     
-    def setup_for_test(self,update_spec={}, sub_spec_name=None):
+    def setup_for_test(self, update_spec={}, sub_spec_name=None):
         if self.cbas_spec_name:
             self.cbas_spec = self.cbas_util_v2.get_cbas_spec(self.cbas_spec_name)
             if update_spec:
@@ -1615,3 +1619,59 @@ class CBASDatasetsAndCollections(CBASBaseTest):
                 status, errors, "Unauthorized user"):
                 self.fail("RBAC user is able to query dataset {0}".format(dataset_name[0]))
         self.log.info("Test finished")
+    
+    def load_data(self, start, end, key=""):
+        if not key:
+            key = self.key
+        gen_load = doc_generator(
+            key, 0, end, key_size=self.key_size, doc_size=self.doc_size,
+            doc_type=self.doc_type, vbuckets=self.cluster_util.vbuckets)
+        op_type = "create"
+        for bucket in self.bucket_util.get_all_buckets():
+            for _, scope in bucket.scopes.items():
+                for _, collection in scope.collections.items():
+                    task = self.task.async_load_gen_docs(
+                        self.cluster, bucket, gen_load, op_type, self.maxttl,
+                        batch_size=10, persist_to=self.persist_to, replicate_to=self.replicate_to,
+                        durability=self.durability_level, pause_secs=5, timeout_secs=self.sdk_timeout,
+                        retries=self.sdk_retries, scope=scope.name, collection=collection.name)
+                    self.task.jython_task_manager.get_task_result(task)
+                    bucket.scopes[scope.name].collections[collection.name].num_items += (end - start)
+                    # Doc count validation
+        self.bucket_util._wait_for_stats_all_buckets()
+        self.bucket_util.validate_docs_per_collections_all_buckets(timeout=60)
+        return True
+    
+    def test_analytics_with_parallel_dataset_creation(self):
+        self.log.info("test_analytics_with_parallel_dataset_creation started")
+        tasks = []
+        handles = []
+        initial_items = self.input.param("initial_items", 1000)
+        self.load_data(0, initial_items)
+        final_items = self.input.param("final_items", 1000) + initial_items
+        run_query = self.input.param("run_query", False)
+        with ThreadPoolExecutor() as executor:
+            datasets_task = executor.submit(
+                self.cbas_util_v2.create_datasets_on_all_collections, bucket_util=self.bucket_util,
+                cbas_name_cardinality=self.input.param('cardinality', None),
+                kv_name_cardinality=self.input.param('bucket_cardinality', None), creation_methods=["cbas_dataset"])
+            tasks.append(datasets_task)
+            if run_query:
+                query = "select sleep(count(*), 50000) from {0} where mutated=0;".format(self.cbas_dataset_name)
+                handles = self.cbas_util_v2._run_concurrent_queries(
+                    query, "async", int(self.input.param("num_queries", 1)), wait_for_execution=False)
+            data_load_task = executor.submit(self.load_data, start=initial_items, end=final_items)
+            tasks.append(data_load_task)
+        results = []
+        for task in tasks:
+            results.append(task.result())
+        if not all(results):
+            self.fail("Concurrent process failed to execute")
+        datasets = self.cbas_util_v2.list_all_dataset_objs()
+        for dataset in datasets:
+            if not self.cbas_util_v2.wait_for_ingestion_complete(
+                    dataset_names=[dataset.full_name], num_items=dataset.kv_collection.num_items):
+                self.fail("Data ingestion into the datasets did not complete")
+        if run_query:
+            self.cbas_util_v2.log_concurrent_query_outcome(self.cluster.master, handles)
+        self.log.info("test_analytics_with_parallel_dataset_creation completed")
