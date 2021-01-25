@@ -110,11 +110,13 @@ class CBASBaseTest(BaseTestCase):
             self.otpNodes = []
             self.cbas_path = server.cbas_path
             self.rest = RestConnection(self.cluster.master)
-            self.log.info(
-                "Setting the min possible memory quota so that adding "
-                "more nodes to the cluster wouldn't be a problem.")
-            self.rest.set_service_memoryQuota(service='memoryQuota',
-                                              memoryQuota=MIN_KV_QUOTA)
+            self.set_kv_to_min = self.input.param("set_kv_to_min", True)
+            if self.set_kv_to_min:
+                self.log.info(
+                    "Setting the min possible memory quota so that adding "
+                    "more nodes to the cluster wouldn't be a problem.")
+                self.rest.set_service_memoryQuota(service='memoryQuota',
+                                                memoryQuota=MIN_KV_QUOTA)
             self.rest.set_service_memoryQuota(service='ftsMemoryQuota',
                                               memoryQuota=FTS_QUOTA)
             self.rest.set_service_memoryQuota(service='indexMemoryQuota',
