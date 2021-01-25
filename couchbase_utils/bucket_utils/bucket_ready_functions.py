@@ -1759,13 +1759,11 @@ class BucketUtils(ScopeUtils):
         return buckets_spec["buckets"]
 
     def create_bucket_from_dict_spec(self, bucket_name, bucket_spec,
-                                     async_create=True,
-                                     wait_for_collection=2):
+                                     async_create=True):
         task = BucketCreateFromSpecTask(self.task_manager,
                                         self.cluster.master,
                                         bucket_name,
-                                        bucket_spec,
-                                        wait_for_collection)
+                                        bucket_spec)
         self.task_manager.add_new_task(task)
         if not async_create:
             self.task_manager.get_task_result(task)
@@ -4472,7 +4470,7 @@ class BucketUtils(ScopeUtils):
                                                 {"name": scope_name})
                         created_scope_collection_details[scope_name] = dict()
                         created_scope_collection_details[scope_name]["collections"] = dict()
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                             futures = dict()
                             with requests.Session() as session:
                                 for _ in range(collection_count):
@@ -4495,7 +4493,7 @@ class BucketUtils(ScopeUtils):
                                         fetch_collections=True)
                 update_ops_details_dict("collections_dropped", buckets_spec,
                                         fetch_collections=True)
-                with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = []
                     with requests.Session() as session:
                         for bucket_name, b_data in buckets_spec.items():
@@ -4520,7 +4518,7 @@ class BucketUtils(ScopeUtils):
                         BucketUtils.create_scope(cluster.master,
                                                  bucket,
                                                  scope_obj.get_dict_object())
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                             futures = []
                             with requests.Session() as session:
                                 for _, collection in scope_obj.collections.items():
@@ -4537,7 +4535,7 @@ class BucketUtils(ScopeUtils):
                 bucket_names.remove("req_collections")
                 net_dict = dict()  # {"buckets"{bucket_name:{"scopes":{scope_name:{"collections":{collections_name:{}}}}}}}
                 net_dict["buckets"] = dict()
-                with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = dict()
                     with requests.Session() as session:
                         for _ in range(ops_spec["req_collections"]):
@@ -4569,7 +4567,7 @@ class BucketUtils(ScopeUtils):
                 else:
                     update_ops_details_dict("collections_flushed", ops_spec)
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = []
                     with requests.Session() as session:
                         for bucket_name, b_data in ops_spec.items():
@@ -4591,7 +4589,7 @@ class BucketUtils(ScopeUtils):
             elif operation_type == "recreate":
                 DocLoaderUtils.log.debug("Recreating collections")
                 update_ops_details_dict("collections_added", ops_spec)
-                with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = []
                     with requests.Session() as session:
                         for bucket_name, b_data in ops_spec.items():
@@ -4609,6 +4607,8 @@ class BucketUtils(ScopeUtils):
 
         DocLoaderUtils.log.info("Performing scope/collection specific "
                                 "operations")
+
+        max_workers = input_spec.get(MetaCrudParams.THREADPOOL_MAX_WORKERS, 10)
 
         # To store the actions wrt bucket/scope/collection
         ops_details = dict()
