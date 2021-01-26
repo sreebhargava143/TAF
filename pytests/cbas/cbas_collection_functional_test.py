@@ -1640,38 +1640,56 @@ class CBASDatasetsAndCollections(CBASBaseTest):
                     # Doc count validation
         self.bucket_util._wait_for_stats_all_buckets()
         self.bucket_util.validate_docs_per_collections_all_buckets()
+        self.bucket_util.print_bucket_stats()
         return True
-    
+    def run_sleep_queries(self, num_queries, datasets):
+        for dataset in datasets:
+            query = "select sleep(count(*), 50000) from {0} where mutated=0".format(dataset)
+            handles = self.cbas_util_v2._run_concurrent_queries(
+                query, "immediate", num_queries, wait_for_execution=False)
+        return handles
     def test_analytics_with_parallel_dataset_creation(self):
         self.log.info("test_analytics_with_parallel_dataset_creation started")
         tasks = []
-        handles = []
         initial_items = self.input.param("initial_items", 1000)
+        self.log.info("\n************************************** Start loading initial items ({0}) **************************************".format(initial_items))
         self.load_data(0, initial_items)
         final_items = self.input.param("final_items", 1000) + initial_items
         run_query = self.input.param("run_query", False)
         with ThreadPoolExecutor() as executor:
+            self.log.info("\n************************************** Start Creating datasets **************************************")
             datasets_task = executor.submit(
                 self.cbas_util_v2.create_datasets_on_all_collections, bucket_util=self.bucket_util,
                 cbas_name_cardinality=self.input.param('cardinality', None),
-                kv_name_cardinality=self.input.param('bucket_cardinality', None), creation_methods=["cbas_dataset"])
+                kv_name_cardinality=self.input.param('bucket_cardinality', None), creation_methods=["cbas_collection"])
             tasks.append(datasets_task)
+            self.log.info("\n************************************** Start loading final items ({0}) **************************************".format(final_items))
             data_load_task = executor.submit(self.load_data, start=initial_items, end=final_items)
             tasks.append(data_load_task)
             if run_query:
                 datasets_created = []
+                datasets_query = 'SELECT VALUE d.DataverseName || "." || d.DatasetName FROM Metadata.`Dataset` d WHERE d.DataverseName <> "Metadata"'
                 while not datasets_created:
-                    dataverses = self.cbas_util_v2.dataverses.values()
-                    for dataverse in dataverses:
-                        datasets_created.extend(list(dataverse.datasets.keys()))
-                for dataset in datasets_created:
-                    query = "select sleep(count(*), 50000) from {0} where mutated=0;".format(dataset)
-                    handles = self.cbas_util_v2._run_concurrent_queries(
-                        query, "async", int(self.input.param("num_queries", 1)), wait_for_execution=False)
+#                     dataverses = self.cbas_util_v2.dataverses.values()
+#                     for dataverse in dataverses:
+#                         datasets_created.extend(list(dataverse.datasets.keys()))
+#                 self.sleep(2)
+                    status, _, _, results, _ = self.cbas_util_v2.execute_statement_on_cbas_util(
+                        datasets_query, mode="immediate", timeout=300, analytics_timeout=300)
+                    if status.encode('utf-8') == 'success' and results:
+                        datasets_created = list(map(lambda dv: dv.encode('utf-8'), results))
+                self.log.info("\n************************************** Datasets Available to query: {0} **************************************".format(str(datasets_created)))
+                num_queries = int(self.input.param("num_queries", 1))
+                self.log.info("\n************************************** Start parallel Queries ({0}) **************************************".format(num_queries))
+                query_task = executor.submit(
+                    self.run_sleep_queries,
+                    num_queries=num_queries,
+                    datasets=datasets_created)
+                tasks.append(query_task)
         results = []
         for task in tasks:
             results.append(task.result())
-        if not all(results):
+        if not all(results[:2]):
             self.fail("Concurrent process failed to execute: " + str(results))
         datasets = self.cbas_util_v2.list_all_dataset_objs()
         for dataset in datasets:
@@ -1679,5 +1697,8 @@ class CBASDatasetsAndCollections(CBASBaseTest):
                     dataset_names=[dataset.full_name], num_items=dataset.kv_collection.num_items):
                 self.fail("Data ingestion into the datasets did not complete")
         if run_query:
+            handles = results[2]
             self.cbas_util_v2.log_concurrent_query_outcome(self.cluster.master, handles)
         self.log.info("test_analytics_with_parallel_dataset_creation completed")
+        if hasattr(self, "failed_count") and self.failed_count:
+            self.fail("Failed due to query failures")
