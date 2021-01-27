@@ -1641,7 +1641,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         return True
     def run_sleep_queries(self, num_queries, datasets):
         for dataset in datasets:
-            query = "select sleep(count(*), 50000) from {0} where mutated=0".format(dataset)
+            query = "select sleep(count(*), 50000) from {0} where mutated=0".format(CBASHelper.format_name(dataset))
             handles = self.cbas_util_v2._run_concurrent_queries(
                 query, "immediate", num_queries, wait_for_execution=False)
         return handles
