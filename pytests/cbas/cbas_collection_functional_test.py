@@ -71,9 +71,8 @@ class CBASDataverseAndScopes(CBASBaseTest):
             self.fail("Dataverse creation failed for few dataverses")
         
         results = []
-        if not self.cbas_util_v2.delete_cbas_infra_created_from_spec(self.cbas_spec,
-                                                                     continue_if_dataverse_drop_fail=False,
-                                                                     delete_dataverse_object=False):
+        if not self.cbas_util_v2.delete_cbas_infra_created_from_spec(
+            continue_if_dataverse_drop_fail=False, delete_dataverse_object=False):
             self.fail("Error while dropping Dataverses created from CBAS spec")
         
         self.log.info("Performing validation in Metadata.Dataverse after dropping dataverses")
@@ -261,14 +260,11 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         self.log.info("TEARDOWN has started")
         self.log.info("================================================================")
         
-        """if self.cbas_spec_name:
-            self.cbas_util_v2.delete_cbas_infra_created_from_spec(self.cbas_spec)"""
         super(CBASDatasetsAndCollections, self).tearDown()
         
         self.log.info("================================================================")
         self.log.info("Teardown has finished")
         self.log.info("================================================================")
-        self.sleep(15)
     
     def setup_for_test(self, update_spec={}, sub_spec_name=None):
         if self.cbas_spec_name:
@@ -345,9 +341,8 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             self.fail("Item count validation for Datasets failed")
         
         self.log.info("Drop datasets")
-        if not self.cbas_util_v2.delete_cbas_infra_created_from_spec(self.cbas_spec,
-                                                                     continue_if_dataset_drop_fail=False,
-                                                                     delete_dataverse_object=False):
+        if not self.cbas_util_v2.delete_cbas_infra_created_from_spec(
+            continue_if_dataset_drop_fail=False, delete_dataverse_object=False):
             self.fail("Error while dropping CBAS entities created from CBAS spec")
         
         self.log.info("Performing validation in Metadata.Dataverse after dropping datasets")
@@ -388,7 +383,8 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             dataset_cardinality=self.input.param('cardinality', 1), 
             bucket_cardinality=self.input.param('bucket_cardinality', 3),
             enabled_from_KV=False, 
-            name_length=self.input.param('name_length', 30), fixed_length=False,
+            name_length=self.input.param('name_length', 30), 
+            fixed_length=self.input.param('fixed_length', False),
             exclude_bucket=[], exclude_scope=[], exclude_collection=exclude_collections, no_of_objs=1)
         dataset = self.cbas_util_v2.list_all_dataset_objs()[0]
         
@@ -426,6 +422,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         if not self.input.param('validate_error', False):
             if self.input.param('no_dataset_name', False):
                 dataset.name = dataset.kv_bucket.name
+                dataset.full_name = dataset.get_fully_qualified_kv_entity_name(1)
             if not self.cbas_util_v2.validate_dataset_in_metadata(dataset.name, dataset.dataverse_name):
                 self.fail("Dataset entry not present in Metadata.Dataset")
             if not self.cbas_util_v2.validate_cbas_dataset_items_count(dataset.full_name, dataset.num_of_items):
@@ -1126,7 +1123,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         
         if not self.cbas_util_v2.create_datasets_on_all_collections(
             self.bucket_util, cbas_name_cardinality=3, kv_name_cardinality=3, 
-            remote_datasets=False, max_thread_count=15):
+            remote_datasets=False):
             self.fail("Error while creating datasets")
             
         dataset_objs = self.cbas_util_v2.list_all_dataset_objs()
@@ -1283,7 +1280,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             doc_loading_spec = self.bucket_util.get_crud_template_from_package("initial_load")
             doc_loading_spec["doc_ttl"] = docTTL
         
-        self.collectionSetUp(self.cluster, self.bucket_util, self.cluster_util, buckets_spec, doc_loading_spec)
+        self.collectionSetUp(self.cluster, self.bucket_util, self.cluster_util, True, buckets_spec, doc_loading_spec)
         self.bucket_util._expiry_pager()
         
         if not self.cbas_util_v2.create_datasets_on_all_collections(
@@ -1670,10 +1667,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
                 datasets_created = []
                 datasets_query = 'SELECT VALUE d.DataverseName || "." || d.DatasetName FROM Metadata.`Dataset` d WHERE d.DataverseName <> "Metadata"'
                 while not datasets_created:
-#                     dataverses = self.cbas_util_v2.dataverses.values()
-#                     for dataverse in dataverses:
-#                         datasets_created.extend(list(dataverse.datasets.keys()))
-#                 self.sleep(2)
+                    self.sleep(3, "Wait for atleast one dataset to be created")
                     status, _, _, results, _ = self.cbas_util_v2.execute_statement_on_cbas_util(
                         datasets_query, mode="immediate", timeout=300, analytics_timeout=300)
                     if status.encode('utf-8') == 'success' and results:
@@ -1700,5 +1694,4 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             handles = results[2]
             self.cbas_util_v2.log_concurrent_query_outcome(self.cluster.master, handles)
         self.log.info("test_analytics_with_parallel_dataset_creation completed")
-        if hasattr(self, "failed_count") and self.failed_count:
-            self.fail("Failed due to query failures")
+
