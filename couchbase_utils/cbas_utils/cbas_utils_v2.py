@@ -1836,18 +1836,24 @@ class Dataset_Util(Link_Util):
         self.log.info("Creating Datasets on all KV collections")
         jobs = Queue()
         results = list()
+        
         if not creation_methods:
             creation_methods = ["cbas_collection","cbas_dataset","enable_cbas_from_kv"]
+        
         if remote_datasets:
             remote_link_objs = self.list_all_link_objs("couchbase")
             creation_methods.remove("enable_cbas_from_kv")
+        
         def dataset_creation(bucket, scope, collection):
             creation_method = random.choice(creation_methods)
+                        
             if remote_datasets:
                 link_name = random.choice(remote_link_objs).full_name
             else:
                 link_name = None
+            
             name = self.generate_name(name_cardinality=1)
+            
             if creation_method == "enable_cbas_from_kv":
                 enabled_from_KV = True
                 dataverse = Dataverse(bucket.name + "." + scope.name)
@@ -1860,7 +1866,9 @@ class Dataset_Util(Link_Util):
                     self.dataverses[dataverse.name] = dataverse
                 else:
                     dataverse = self.get_dataverse_obj("Default")
+                                    
             num_of_items = collection.num_items
+                
             if creation_method == "cbas_collection":
                 dataset_obj = CBAS_Collection(
                     name=name, dataverse_name=dataverse.name,link_name=link_name, 
@@ -1873,8 +1881,10 @@ class Dataset_Util(Link_Util):
                     dataset_source="internal", dataset_properties={},
                     bucket=bucket, scope=scope, collection=collection, 
                     enabled_from_KV=enabled_from_KV, num_of_items=num_of_items)
+            
             jobs.put(dataset_obj)
             dataverse.datasets[dataset_obj.full_name] = dataset_obj
+        
         for bucket in bucket_util.buckets:
             if kv_name_cardinality > 1:
                 for scope in bucket_util.get_active_scopes(bucket):
@@ -1883,6 +1893,8 @@ class Dataset_Util(Link_Util):
             else:
                 scope = bucket_util.get_scope_obj(bucket, "_default")
                 dataset_creation(bucket, scope, bucket_util.get_collection_obj(scope, "_default"))
+                
+            
         def consumer_func(dataset):
             dataverse_name = dataset.dataverse_name
             if dataverse_name == "Default":
@@ -1919,8 +1931,9 @@ class Dataset_Util(Link_Util):
                         dataset.name, dataset.get_fully_qualified_kv_entity_name(1), None, 
                         False, False, None, dataset.link_name, None, False, None, None, 
                         None, 120, 120, analytics_collection)
+        
         self.run_jobs_in_parallel(consumer_func, jobs, results, 1, async_run=False, consume_from_queue_func=None)
-
+            
         return all(results)
     
     def create_dataset_obj(self, bucket_util, dataset_cardinality=1, bucket_cardinality=1,

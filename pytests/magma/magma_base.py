@@ -56,6 +56,8 @@ class MagmaBaseTest(BaseTestCase):
         self.bucket_eviction_policy = self.input.param("bucket_eviction_policy",
                                                        Bucket.EvictionPolicy.FULL_EVICTION)
         self.bucket_util.add_rbac_user()
+        self.bucket_name = self.input.param("bucket_name",
+                                               None)
 
         self.magma_buckets = self.input.param("magma_buckets", 0)
         if self.standard_buckets > 10:
@@ -103,7 +105,7 @@ class MagmaBaseTest(BaseTestCase):
 
         if self.dcp_services:
             self.initial_query = "CREATE INDEX initial_idx on default:`%s`.`%s`.`%s`(meta().id) with \
-            {\"defer_build\": true};" % (self.buckets[0].name,
+            {\"defer_build\": false};" % (self.buckets[0].name,
                                          self.scope_name,
                                          self.collections[0])
             self.query_client = RestConnection(self.dcp_servers[0])
@@ -246,7 +248,8 @@ class MagmaBaseTest(BaseTestCase):
             bucket_type=self.bucket_type,
             storage={"couchstore": self.standard_buckets - self.magma_buckets,
                      "magma": self.magma_buckets},
-            eviction_policy=self.bucket_eviction_policy)
+            eviction_policy=self.bucket_eviction_policy,
+            bucket_name=self.bucket_name)
         self.assertTrue(buckets_created, "Unable to create multiple buckets")
 
         for bucket in self.bucket_util.buckets:
@@ -273,7 +276,7 @@ class MagmaBaseTest(BaseTestCase):
             self.assertTrue(result["status"] == "success", "Index query failed!")
 
             final_index = "CREATE INDEX final_idx on default:`%s`.`%s`.`%s`(meta().id) with \
-            {\"defer_build\": true};" % (self.buckets[0].name,
+            {\"defer_build\": false};" % (self.buckets[0].name,
                                          self.scope_name,
                                          self.collections[0])
             result = self.query_client.query_tool(final_index)

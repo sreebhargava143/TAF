@@ -12,7 +12,7 @@ from BucketLib.BucketOperations import BucketHelper
 from couchbase_helper.documentgenerator import doc_generator
 from security.rbac_base import RbacBase
 from Queue import Queue
-from CbasLib.cbas_entity import Dataverse,Synonym,CBAS_Index
+from CbasLib.cbas_entity import Dataverse,CBAS_Scope,Link,Dataset,CBAS_Collection,Synonym,CBAS_Index
 from CbasLib.CBASOperations import CBASHelper
 from concurrent.futures import ThreadPoolExecutor
 
@@ -246,10 +246,12 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             if "default_bucket" not in self.input.test_params:
                 self.input.test_params.update({"default_bucket": False})
         super(CBASDatasetsAndCollections, self).setUp()
-        init_nodes = list(filter(
-            lambda node: node.ip != self.cluster.master.ip and node.ip != self.cbas_node.ip,
-            self.cluster.servers))
-        self.cluster_util.add_all_nodes_then_rebalance(init_nodes)
+        if self.nodes_init > 2:
+            init_nodes = list(filter(
+                lambda node: node.ip != self.cluster.master.ip and node.ip != self.cbas_node.ip,
+                self.cluster.servers))
+            self.cluster_util.add_all_nodes_then_rebalance(init_nodes[:self.nodes_init - 2])
+
         self.log.info("================================================================")
         self.log.info("SETUP has finished")
         self.log.info("================================================================")
@@ -266,7 +268,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         self.log.info("Teardown has finished")
         self.log.info("================================================================")
     
-    def setup_for_test(self, update_spec={}, sub_spec_name=None):
+    def setup_for_test(self,update_spec={}, sub_spec_name=None):
         if self.cbas_spec_name:
             self.cbas_spec = self.cbas_util_v2.get_cbas_spec(self.cbas_spec_name)
             if update_spec:
@@ -1616,12 +1618,12 @@ class CBASDatasetsAndCollections(CBASBaseTest):
                 status, errors, "Unauthorized user"):
                 self.fail("RBAC user is able to query dataset {0}".format(dataset_name[0]))
         self.log.info("Test finished")
-    
+        
     def load_data(self, start, end, key=""):
         if not key:
             key = self.key
         gen_load = doc_generator(
-            key, 0, end, key_size=self.key_size, doc_size=self.doc_size,
+            key, start, end, key_size=self.key_size, doc_size=self.doc_size,
             doc_type=self.doc_type, vbuckets=self.cluster_util.vbuckets)
         op_type = "create"
         for bucket in self.bucket_util.get_all_buckets():
@@ -1639,31 +1641,31 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         self.bucket_util.validate_docs_per_collections_all_buckets()
         self.bucket_util.print_bucket_stats()
         return True
+    
     def run_sleep_queries(self, num_queries, datasets):
         for dataset in datasets:
             query = "select sleep(count(*), 50000) from {0} where mutated=0".format(CBASHelper.format_name(dataset))
             handles = self.cbas_util_v2._run_concurrent_queries(
                 query, "immediate", num_queries, wait_for_execution=False)
         return handles
+    
     def test_analytics_with_parallel_dataset_creation(self):
-        self.log.info("test_analytics_with_parallel_dataset_creation started")
+        self.log.info("\n************************************** test_analytics_with_parallel_dataset_creation started **************************************")
         tasks = []
-        initial_items = self.input.param("initial_items", 1000)
-        self.log.info("\n************************************** Start loading initial items ({0}) **************************************".format(initial_items))
-        self.load_data(0, initial_items)
-        final_items = self.input.param("final_items", 1000) + initial_items
+        parallel_load_items = self.input.param("parallel_load_items", 1000) + self.num_items
         run_query = self.input.param("run_query", False)
-        with ThreadPoolExecutor() as executor:
+        with ThreadPoolExecutor(max_workers=5, thread_name_prefix='parallel_test_pool') as executor:
             self.log.info("\n************************************** Start Creating datasets **************************************")
             datasets_task = executor.submit(
                 self.cbas_util_v2.create_datasets_on_all_collections, bucket_util=self.bucket_util,
                 cbas_name_cardinality=self.input.param('cardinality', None),
                 kv_name_cardinality=self.input.param('bucket_cardinality', None), creation_methods=["cbas_collection"])
             tasks.append(datasets_task)
-            self.log.info("\n************************************** Start loading final items ({0}) **************************************".format(final_items))
-            data_load_task = executor.submit(self.load_data, start=initial_items, end=final_items)
+            self.log.info("\n************************************** Start loading parallel items ({0}) **************************************".format(parallel_load_items))
+            data_load_task = executor.submit(self.load_data, start=self.num_items, end=parallel_load_items)
             tasks.append(data_load_task)
             if run_query:
+                num_queries = int(self.input.param("num_queries", 1))
                 datasets_created = []
                 datasets_query = 'SELECT VALUE d.DataverseName || "." || d.DatasetName FROM Metadata.`Dataset` d WHERE d.DataverseName <> "Metadata"'
                 while not datasets_created:
@@ -1673,7 +1675,6 @@ class CBASDatasetsAndCollections(CBASBaseTest):
                     if status.encode('utf-8') == 'success' and results:
                         datasets_created = list(map(lambda dv: dv.encode('utf-8'), results))
                 self.log.info("\n************************************** Datasets Available to query: {0} **************************************".format(str(datasets_created)))
-                num_queries = int(self.input.param("num_queries", 1))
                 self.log.info("\n************************************** Start parallel Queries ({0}) **************************************".format(num_queries))
                 query_task = executor.submit(
                     self.run_sleep_queries,
@@ -1686,12 +1687,19 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         if not all(results[:2]):
             self.fail("Concurrent process failed to execute: " + str(results))
         datasets = self.cbas_util_v2.list_all_dataset_objs()
+        jobs = Queue()
         for dataset in datasets:
-            if not self.cbas_util_v2.wait_for_ingestion_complete(
-                    dataset_names=[dataset.full_name], num_items=dataset.kv_collection.num_items):
-                self.fail("Data ingestion into the datasets did not complete")
+            jobs.put(
+                (self.cbas_util_v2.wait_for_ingestion_complete,
+                 {"dataset_names": [dataset.full_name],
+                  "num_items": dataset.kv_collection.num_items}))
+        ingestion_results = []
+        def consumer_func(job):
+            return job[0](**job[1])
+        self.cbas_util_v2.run_jobs_in_parallel(consumer_func, jobs, ingestion_results, len(datasets) // 10)
+        if not all(ingestion_results):
+            self.fail("Data ingestion into the datasets did not complete")
         if run_query:
             handles = results[2]
             self.cbas_util_v2.log_concurrent_query_outcome(self.cluster.master, handles)
-        self.log.info("test_analytics_with_parallel_dataset_creation completed")
-
+        self.log.info("\n************************************** test_analytics_with_parallel_dataset_creation completed **************************************")
