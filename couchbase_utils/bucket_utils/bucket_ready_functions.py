@@ -2486,6 +2486,42 @@ class BucketUtils(ScopeUtils):
             track_failures=track_failures,
             sdk_client_pool=sdk_client_pool)
 
+    def load_docs_to_all_collections(self, start, end, cluster, key="test_docs", op_type="create", async_run=False):
+        """
+        Loads documents to all the collections available in bucket_util
+        
+        :param start int, starting of document serial
+        :param end int, ending of document serial
+        :param: key string, prefix for the document name
+        :param: async_run boolean, flag for async run it may not guarantee the
+        correctness of num_items update in bucket object
+        if loading asynchronously then it is suggested to wait for the results of
+        all the tasks and validate doc_count explicitly
+        
+        :return: tasks list, list of all tasks
+        """
+        tasks = []
+        gen_load = doc_generator(key, start, end)
+        for bucket in self.get_all_buckets():
+            for _, scope in bucket.scopes.items():
+                for _, collection in scope.collections.items():
+                    task = self.task.async_load_gen_docs(
+                        cluster, bucket,
+                        gen_load, op_type,
+                        batch_size=10,
+                        pause_secs=5,
+                        scope=scope.name,
+                        collection=collection.name)
+                    tasks.append(task)
+                    if not async_run:
+                        self.task.jython_task_manager.get_task_result(task)
+                    bucket.scopes[scope.name].collections[collection.name].num_items += (end - start)
+                    # Doc count validation
+        if not async_run:
+            self._wait_for_stats_all_buckets()
+            self.validate_docs_per_collections_all_buckets()
+        return tasks
+    
     def _async_load_all_buckets(self, cluster, kv_gen, op_type,
                                 exp, random_exp=False,
                                 flag=0, persist_to=0, replicate_to=0,
