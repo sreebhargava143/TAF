@@ -242,11 +242,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
                 self.input.test_params.update({"default_bucket": False})
         
         super(CBASDatasetsAndCollections, self).setUp()
-        if self.nodes_init > 2:
-            init_nodes = list(filter(
-                lambda node: node.ip != self.cluster.master.ip and node.ip != self.cbas_node.ip,
-                self.cluster.servers))
-            self.cluster_util.add_all_nodes_then_rebalance(init_nodes[:self.nodes_init - 2])
+        
         self.parallel_load = self.input.param("parallel_load", False)
         self.parallel_load_percent = int(self.input.param("parallel_load_percent", 100))
         self.run_concurrent_query = self.input.param("run_query", False)
@@ -256,7 +252,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         
         self.log_setup_status("CBASRebalance", "Started", stage="Teardown")
         
-        super(CBASDatasetsAndCollections, self).tearDown()
+#         super(CBASDatasetsAndCollections, self).tearDown()
         
         self.log_setup_status("CBASRebalance", "Finished", stage="Teardown")
     
