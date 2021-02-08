@@ -246,15 +246,16 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         self.parallel_load = self.input.param("parallel_load", False)
         self.parallel_load_percent = int(self.input.param("parallel_load_percent", 100))
         self.run_concurrent_query = self.input.param("run_query", False)
-        self.log_setup_status("CBASRebalance", "Finished", stage="setup")
+        self.ingestion_timeout = self.input.param("ingestion_timeout", 300)
+        self.log_setup_status("CBASDatasetsAndCollections", "Finished", stage="setup")
 
     def tearDown(self):
         
-        self.log_setup_status("CBASRebalance", "Started", stage="Teardown")
+        self.log_setup_status("CBASDatasetsAndCollections", "Started", stage="Teardown")
         
-#         super(CBASDatasetsAndCollections, self).tearDown()
+        super(CBASDatasetsAndCollections, self).tearDown()
         
-        self.log_setup_status("CBASRebalance", "Finished", stage="Teardown")
+        self.log_setup_status("CBASDatasetsAndCollections", "Finished", stage="Teardown")
     
     def setup_for_test(self,update_spec={}, sub_spec_name=None):
         wait_for_ingestion = (not self.parallel_load)
@@ -301,14 +302,14 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             DocLoaderUtils.validate_doc_loading_results(self.data_load_task)
             self.bucket_util._wait_for_stats_all_buckets()
             self.bucket_util.validate_docs_per_collections_all_buckets()
-            self.data_load_task = None
+            delattr(self, "data_load_task")
     
     def wait_for_query_task(self):
         if hasattr(self, "query_task") and self.query_task:
             self.task_manager.get_task_result(self.query_task)
             if self.query_task.exception:
                 raise self.query_task.exception
-            self.query_task = None
+            delattr(self, "query_task")
     
     def caller(self, job):
         return job[0](**job[1])
@@ -322,7 +323,9 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             self.log.info("Waiting for data to be ingested into datasets")
             for dataset in datasets:
                 jobs.put((self.cbas_util_v2.wait_for_ingestion_complete,
-                          {"dataset_names":[dataset.full_name], "num_items":dataset.num_of_items}))
+                          {"dataset_names":[dataset.full_name],
+                           "num_items":dataset.num_of_items,
+                           "timeout": self.ingestion_timeout}))
         self.cbas_util_v2.run_jobs_in_parallel(self.caller, jobs, results, 15, 
                                   async_run=False, consume_from_queue_func=None)
         if not all(results):
@@ -1364,16 +1367,17 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         
         self.collectionSetUp(self.cluster, self.bucket_util, self.cluster_util, True, buckets_spec, doc_loading_spec)
         self.bucket_util._expiry_pager()
-        
+        if self.parallel_load:
+            self.start_data_load_task()
+        if self.run_concurrent_query:
+            self.start_query_task()
         if not self.cbas_util_v2.create_datasets_on_all_collections(
-            self.bucket_util, cbas_name_cardinality=3, kv_name_cardinality=3):
+            self.bucket_util, cbas_name_cardinality=3, kv_name_cardinality=3, creation_methods=["cbas_collection","cbas_dataset"]):
             self.fail("Dataset creation failed")
-        
+        self.wait_for_query_task()
+        self.wait_for_data_load_task()
         datasets = self.cbas_util_v2.list_all_dataset_objs()
-        for dataset in datasets:
-            if not self.cbas_util_v2.wait_for_ingestion_complete([dataset.full_name], dataset.num_of_items):
-                self.fail("Error while data ingestion into dataset")
-        
+        self.wait_for_ingestion_all_datasets()
         self.sleep(200, "waiting for maxTTL to complete")
         
         self.log.info("Validating item count")

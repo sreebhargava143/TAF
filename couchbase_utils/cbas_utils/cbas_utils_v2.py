@@ -931,10 +931,10 @@ class Link_Util(Dataverse_Util):
                 no_of_remote_links = cbas_spec.get("no_of_links")//2
                 no_of_external_links = cbas_spec.get("no_of_links")//2
             else:
-                no_of_remote_links = cbas_spec.get("no_of_links") * (
-                    cbas_spec.get("percent_of_remote_links") // 100)
-                no_of_external_links = cbas_spec.get("no_of_links")* (
-                    cbas_spec.get("percent_of_external_links") // 100)
+                no_of_remote_links = (
+                    cbas_spec.get("no_of_links") * cbas_spec.get("percent_of_remote_links")) // 100
+                no_of_external_links = (
+                    cbas_spec.get("no_of_links")* cbas_spec.get("percent_of_external_links")) // 100
             
             for i in range(1, cbas_spec.get("no_of_links")+1):
                 if link_spec.get("name_key", "random").lower() == "random":
@@ -1636,8 +1636,8 @@ class Dataset_Util(Link_Util):
                 no_of_remote_datasets = total_no_of_datasets // 3
                 no_of_local_datasets = total_no_of_datasets // 3
             else:
-                no_of_external_datasets = total_no_of_datasets * (cbas_spec.get("percent_of_external_datasets",0) // 100)
-                no_of_remote_datasets = total_no_of_datasets * (cbas_spec.get("percent_of_remote_datasets") // 100)
+                no_of_external_datasets = (total_no_of_datasets * cbas_spec.get("percent_of_external_datasets",0)) // 100
+                no_of_remote_datasets = (total_no_of_datasets * cbas_spec.get("percent_of_remote_datasets")) // 100
                 no_of_local_datasets = total_no_of_datasets - no_of_external_datasets - no_of_remote_datasets
             
             for dataverse in self.dataverses.values():
@@ -2029,8 +2029,8 @@ class Dataset_Util(Link_Util):
             if count > no_of_objs:
                 break
     
-    def validate_docs_in_all_datasets(self, bucket_util):
-        self.refresh_dataset_item_count(bucket_util)
+    def validate_docs_in_all_datasets(self, local_bucket_util, remote_bucket_util=None):
+        self.refresh_dataset_item_count(local_bucket_util, remote_bucket_util)
         datasets = self.list_all_dataset_objs()
         jobs = Queue()
         results = list()
@@ -2045,14 +2045,18 @@ class Dataset_Util(Link_Util):
         self.run_jobs_in_parallel(consumer_func, jobs, results, 50, async_run=False)
         return all(results)
     
-    def refresh_dataset_item_count(self, bucket_util):
+    def refresh_dataset_item_count(self, local_bucket_util, remote_bucket_util=None):
         datasets = self.list_all_dataset_objs()
         for dataset in datasets:
             if dataset.kv_collection:
                 dataset.num_of_items = dataset.kv_collection.num_items
             else:
-                dataset.num_of_items = bucket_util.get_collection_obj(
-                    bucket_util.get_scope_obj(dataset.kv_bucket, "_default"), "_default").num_items
+                if dataset.link_name:
+                    dataset.num_of_items = remote_bucket_util.get_collection_obj(
+                        remote_bucket_util.get_scope_obj(dataset.kv_bucket, "_default"), "_default").num_items
+                else:
+                    dataset.num_of_items = local_bucket_util.get_collection_obj(
+                    local_bucket_util.get_scope_obj(dataset.kv_bucket, "_default"), "_default").num_items
     
     def get_datasets(self, retries=10):
         datasets_created = []
@@ -3373,6 +3377,7 @@ class CbasUtil(Index_Util):
         if wait_for_ingestion:
         # Wait for data ingestion only for datasets based on either local KV source or remote KV source,
             internal_datasets = self.list_all_dataset_objs(dataset_source="internal")
+            self.refresh_dataset_item_count(local_bucket_util,remote_bucket_util)
             if len(internal_datasets) > 0:
                 self.log.info("Waiting for data to be ingested into datasets")
                 for dataset in internal_datasets:
@@ -3568,8 +3573,8 @@ class CreateDatasetsOnAllCollectionsTask(Task):
         else:
             enabled_from_KV = False
             if self.cbas_name_cardinality > 1:
-                dataverse = Dataverse(self.cbas_util.generate_name(self.cbas_name_cardinality-1))
-                self.cbas_util.dataverses[dataverse.name] = dataverse
+                dataverse = Dataverse(self.cbas_util.generate_name(
+                    self.cbas_name_cardinality-1))
             else:
                 dataverse = self.cbas_util.get_dataverse_obj("Default")
                                 
@@ -3588,8 +3593,12 @@ class CreateDatasetsOnAllCollectionsTask(Task):
                 bucket=bucket, scope=scope, collection=collection, 
                 enabled_from_KV=enabled_from_KV, num_of_items=num_of_items,
                 link_name=link_name)
-        self.create_dataset(dataset_obj)
+        if not self.create_dataset(dataset_obj):
+            raise N1QLQueryException(
+                "Could not create dataset " + dataset_obj.name + " on " + 
+                dataset_obj.dataverse_name)
         dataverse.datasets[dataset_obj.full_name] = dataset_obj
+        self.cbas_util.dataverses[dataverse.name] = dataverse
     
     def create_dataset(self, dataset):
         dataverse_name = dataset.dataverse_name
@@ -3598,10 +3607,12 @@ class CreateDatasetsOnAllCollectionsTask(Task):
         if dataset.enabled_from_KV:
             if self.kv_name_cardinality > 1:
                 return self.cbas_util.enable_analytics_from_KV(
-                    dataset.full_kv_entity_name, False, False, None, None, None, 120, 120)
+                    dataset.full_kv_entity_name, False, False, None, None,
+                    None, 120, 120)
             else:
                 return self.cbas_util.enable_analytics_from_KV(
-                    dataset.get_fully_qualified_kv_entity_name(1), False, False, None, None, None, 120, 120)
+                    dataset.get_fully_qualified_kv_entity_name(1), False,
+                    False, None, None, None, 120, 120)
         else:
             if isinstance(dataset, CBAS_Collection):
                 analytics_collection = True
@@ -3610,23 +3621,26 @@ class CreateDatasetsOnAllCollectionsTask(Task):
             if self.kv_name_cardinality > 1 and self.cbas_name_cardinality > 1:
                 return self.cbas_util.create_dataset(
                     dataset.name, dataset.full_kv_entity_name, dataverse_name, 
-                    False, False, None, dataset.link_name, None, False, None, None, 
-                    None, 120, 120, analytics_collection)
-            elif self.kv_name_cardinality > 1 and self.cbas_name_cardinality == 1:
+                    False, False, None, dataset.link_name, None, False, None,
+                    None, None, 120, 120, analytics_collection)
+            elif self.kv_name_cardinality > 1 and \
+            self.cbas_name_cardinality == 1:
                 return self.cbas_util.create_dataset(
-                    dataset.name, dataset.full_kv_entity_name, None, 
-                    False, False, None, dataset.link_name, None, False, None, None, 
+                    dataset.name, dataset.full_kv_entity_name, None, False,
+                    False, None, dataset.link_name, None, False, None, None, 
                     None, 120, 120, analytics_collection)
-            elif self.kv_name_cardinality == 1 and self.cbas_name_cardinality > 1:
+            elif self.kv_name_cardinality == 1 and \
+            self.cbas_name_cardinality > 1:
                 return self.cbas_util.create_dataset(
-                    dataset.name, dataset.get_fully_qualified_kv_entity_name(1), dataverse_name, 
-                    False, False, None, dataset.link_name, None, False, None, None, 
-                    None, 120, 120, analytics_collection)
+                    dataset.name, dataset.get_fully_qualified_kv_entity_name(1),
+                    dataverse_name, False, False, None, dataset.link_name, None,
+                    False, None, None, None, 120, 120, analytics_collection)
             else:
                 return self.cbas_util.create_dataset(
-                    dataset.name, dataset.get_fully_qualified_kv_entity_name(1), None, 
-                    False, False, None, dataset.link_name, None, False, None, None, 
-                    None, 120, 120, analytics_collection)
+                    dataset.name, dataset.get_fully_qualified_kv_entity_name(1),
+                    None, False, False, None, dataset.link_name, None, False,
+                    None, None, None, 120, 120, analytics_collection)
+
 
 class RunSleepQueryOnDatasetsTask(Task):
     def __init__(self, num_queries, cbas_util, datasets=[],
