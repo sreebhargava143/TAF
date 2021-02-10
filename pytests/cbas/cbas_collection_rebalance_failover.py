@@ -9,7 +9,6 @@ from cbas_utils.cbas_utils_v2 import CBASRebalanceUtil
 
 
 class CBASRebalance(CBASBaseTest):
-
     def setUp(self):
         self.input = TestInputSingleton.input
         if "bucket_spec" not in self.input.test_params:

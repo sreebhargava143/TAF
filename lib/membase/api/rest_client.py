@@ -2577,7 +2577,6 @@ class RestConnection(object):
 
     def print_UI_logs(self, last_n=10, contains_text=None):
         logs = self.get_logs(last_n, contains_text)
-        print(logs)
         self.test_log.info("Latest logs from UI on {0}:".format(self.ip))
         for lg in logs:
             self.test_log.error(lg)
