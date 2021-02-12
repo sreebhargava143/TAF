@@ -91,7 +91,7 @@ class CBASBaseTest(BaseTestCase):
             'set_cbas_memory_from_available_free_memory', False)
         self.parallel_load = self.input.param("parallel_load", False)
         self.parallel_load_percent = int(self.input.param(
-            "parallel_load_percent", 100))
+            "parallel_load_percent", 0))
         self.cbas_node = None
         services = None
         nodes_init = None
@@ -337,6 +337,12 @@ class CBASBaseTest(BaseTestCase):
                     cluster.cbas_util.closeConn()
         super(CBASBaseTest, self).tearDown()
 
+    def cbas_logger(self, msg, type="INFO"):
+        if type == "INFO":
+            self.log.info("*" * 10 + msg + "*" * 10)
+        if type == "DEBUG":
+            self.log.debug("*" * 10 + msg + "*" * 10)
+
     def cleanup_cbas(self, cbas_util=None):
         """
         Drops all connections, datasets and buckets from CBAS
@@ -353,9 +359,9 @@ class CBASBaseTest(BaseTestCase):
                 for row in results:
                     cbas_util.disconnect_from_bucket(row['Name'],
                                                      disconnect_if_connected=True)
-                    self.log.info("******* Disconnected all buckets *******")
+                    self.cbas_logger("Disconnected all buckets")
             else:
-                self.log.info("******* No buckets to disconnect *******")
+                self.cbas_logger("No buckets to disconnect")
 
             # Drop all datasets
             cmd_get_datasets = "select DatasetName from Metadata.`Dataset` where DataverseName != \"Metadata\";"
@@ -364,9 +370,9 @@ class CBASBaseTest(BaseTestCase):
             if (results is not None) & (len(results) > 0):
                 for row in results:
                     cbas_util.drop_dataset("`" + row['DatasetName'] + "`")
-                    self.log.info("********* Dropped all datasets *********")
+                    self.cbas_logger("Dropped all datasets")
             else:
-                self.log.info("********* No datasets to drop *********")
+                self.cbas_logger("No datasets to drop")
 
             # Drop all buckets
             status, metrics, errors, results, _ = cbas_util.execute_statement_on_cbas_util(
@@ -374,9 +380,9 @@ class CBASBaseTest(BaseTestCase):
             if (results is not None) & (len(results) > 0):
                 for row in results:
                     cbas_util.drop_cbas_bucket("`" + row['Name'] + "`")
-                    self.log.info("********* Dropped all buckets *********")
+                    self.cbas_logger("Dropped all buckets")
             else:
-                self.log.info("********* No buckets to drop *********")
+                self.cbas_logger("No buckets to drop")
 
             self.log.info("Drop Dataverse other than Default and Metadata")
             cmd_get_dataverse = 'select DataverseName from Metadata.`Dataverse` where DataverseName != "Metadata" and DataverseName != "Default";'
@@ -388,10 +394,10 @@ class CBASBaseTest(BaseTestCase):
                         "`" + row['DataverseName'] + "`" + ".Local")
                     cbas_util.drop_dataverse_on_cbas(
                         dataverse_name="`" + row['DataverseName'] + "`")
-                self.log.info(
-                    "********* Dropped all dataverse except Default and Metadata *********")
+                self.cbas_logger(
+                    "Dropped all dataverse except Default and Metadata")
             else:
-                self.log.info("********* No dataverse to drop *********")
+                self.cbas_logger("No dataverse to drop")
         except Exception as e:
             self.log.info(e.message)
 

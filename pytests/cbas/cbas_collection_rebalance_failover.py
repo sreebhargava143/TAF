@@ -23,8 +23,8 @@ class CBASRebalance(CBASBaseTest):
 
         self.rebalance_util = CBASRebalanceUtil(
             self.cluster, self.cluster_util, self.bucket_util, self.task,
-            self.rest, self.input.param("vbucket_check", True),
-            self.cbas_util_v2)
+            self.rest,
+            self.input.param("vbucket_check", True), self.cbas_util_v2)
         CBASRebalanceUtil.exclude_nodes.extend(
             [self.cluster.master, self.cbas_node])
         self.rebalance_util.run_parallel_kv_query = self.input.param(
@@ -65,25 +65,14 @@ class CBASRebalance(CBASBaseTest):
         self.log.info(
             "Doing collection data load {0} {1}".format(self.data_load_stage,
                                                         rebalance_operation))
-        if rebalance_operation in ["rebalance_out", "rebalance_in_out"]:
-            # Rebalance in nodes before rebalancing out
-            if len(self.rebalance_util.cluster.nodes_in_cluster) <= 2:
-                if kv_nodes_out > 0:
-                    kv_nodes_in = 1
-                if cbas_nodes_out > 0:
-                    cbas_nodes_in = 1
-                rebalance_task = self.rebalance_util.rebalance(
-                    kv_nodes_in=kv_nodes_in, kv_nodes_out=0,
-                    cbas_nodes_in=cbas_nodes_in, cbas_nodes_out=0)
-                if not self.rebalance_util.wait_for_rebalance_task_to_complete(
-                        rebalance_task):
-                    self.fail("Pre-Rebalance failed")
         if self.data_load_stage == "before":
             if not self.rebalance_util.data_load_collection(
                     self.doc_spec_name, self.skip_validations,
                     async_load=False):
                 self.fail("Doc loading failed")
         if self.data_load_stage == "during":
+            if self.parallel_load_percent <= 0:
+                self.parallel_load_percent = 100
             data_load_task = self.rebalance_util.data_load_collection(
                 self.doc_spec_name, self.skip_validations, async_load=True,
                 percentage_per_collection=self.parallel_load_percent)
@@ -126,8 +115,8 @@ class CBASRebalance(CBASBaseTest):
                 self.fail("Doc loading failed")
         if self.data_load_stage == "during":
             reset_flag = False
-            if (
-                    not self.rebalance_util.durability_level) and failover_type == "Hard" and "kv" in service_type:
+            if (not self.rebalance_util.durability_level) and failover_type \
+                    == "Hard" and "kv" in service_type:
                 # Force a durability level to prevent data loss during hard failover
                 self.log.info("Forcing durability level: MAJORITY")
                 self.rebalance_util.durability_level = "MAJORITY"

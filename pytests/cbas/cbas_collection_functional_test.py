@@ -253,7 +253,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
                               stage=self.tearDown.__name__)
 
     def setup_for_test(self, update_spec={}, sub_spec_name=None):
-        wait_for_ingestion = (not self.parallel_load)
+        wait_for_ingestion = (not self.parallel_load_percent)
         if self.cbas_spec_name:
             self.cbas_spec = self.cbas_util_v2.get_cbas_spec(
                 self.cbas_spec_name)
@@ -293,13 +293,14 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             sleep_time=sleep_time)
         self.task_manager.add_new_task(self.query_task)
 
-    def wait_for_data_load_task(self):
+    def wait_for_data_load_task(self, verify=True):
         if hasattr(self, "data_load_task") and self.data_load_task:
             self.task.jython_task_manager.get_task_result(self.data_load_task)
-            # Validate data loaded in parallel
-            DocLoaderUtils.validate_doc_loading_results(self.data_load_task)
-            self.bucket_util._wait_for_stats_all_buckets()
-            self.bucket_util.validate_docs_per_collections_all_buckets()
+            if verify:
+                # Validate data loaded in parallel
+                DocLoaderUtils.validate_doc_loading_results(self.data_load_task)
+                self.bucket_util._wait_for_stats_all_buckets()
+                self.bucket_util.validate_docs_per_collections_all_buckets()
             delattr(self, "data_load_task")
 
     def wait_for_query_task(self):
@@ -308,26 +309,6 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             if self.query_task.exception:
                 raise self.query_task.exception
             delattr(self, "query_task")
-
-    def caller(self, job):
-        return job[0](**job[1])
-
-    def wait_for_ingestion_all_datasets(self):
-        self.cbas_util_v2.refresh_dataset_item_count(self.bucket_util)
-        jobs = Queue()
-        results = []
-        datasets = self.cbas_util_v2.list_all_dataset_objs()
-        if len(datasets) > 0:
-            self.log.info("Waiting for data to be ingested into datasets")
-            for dataset in datasets:
-                jobs.put((self.cbas_util_v2.wait_for_ingestion_complete,
-                          {"dataset_names": [dataset.full_name],
-                           "num_items": dataset.num_of_items}))
-        self.cbas_util_v2.run_jobs_in_parallel(self.caller, jobs, results, 15,
-                                               async_run=False,
-                                               consume_from_queue_func=None)
-        if not all(results):
-            self.fail("Ingestion did not complete")
 
     def test_create_drop_datasets(self):
         """
@@ -349,7 +330,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             "max_thread_count": self.input.param('no_of_threads', 1),
             "creation_methods": ["cbas_collection", "cbas_dataset"]}
         # start parallel data loading
-        if self.parallel_load:
+        if self.parallel_load_percent:
             self.start_data_load_task(
                 percentage_per_collection=self.parallel_load_percent)
         # start parallel queries
@@ -366,7 +347,9 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         )
         jobs = Queue()
         results = list()
-        self.wait_for_ingestion_all_datasets()
+        if not self.cbas_util_v2.wait_for_ingestion_all_datasets(
+                self.bucket_util):
+            self.fail("Ingestion failed")
 
         def populate_job_queue():
             for dataset in self.cbas_util_v2.list_all_dataset_objs():
@@ -565,8 +548,10 @@ class CBASDatasetsAndCollections(CBASBaseTest):
                     jobs.put(obj.dataverse_name)
 
         populate_job_queue(dataset_objs, self.cbas_util_v2.enable_analytics_from_KV)
-        if self.parallel_load:
-            self.start_data_load_task(async_load=True, percentage_per_collection=self.parallel_load_percent)
+        if self.parallel_load_percent:
+            self.start_data_load_task(
+                async_load=True,
+                percentage_per_collection=self.parallel_load_percent)
         if self.run_concurrent_query:
             self.start_query_task()
         self.cbas_util_v2.run_jobs_in_parallel(self.cbas_util_v2.enable_analytics_from_KV, jobs, results, 1)
@@ -579,15 +564,19 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         self.cbas_util_v2.run_jobs_in_parallel(consumer_func, jobs, results, 15)
         if not all(results):
             self.fail("Error while validating the datasets in Metadata")
-        self.wait_for_ingestion_all_datasets()
+        if not self.cbas_util_v2.wait_for_ingestion_all_datasets(
+                self.bucket_util):
+            self.fail("Ingestion failed")
         populate_job_queue(self.cbas_util_v2.list_all_synonym_objs(), self.cbas_util_v2.validate_synonym_in_metadata)
         self.cbas_util_v2.run_jobs_in_parallel(consumer_func, jobs, results, 15)
         if not all(results):
             self.fail("Synonym was not created")
         if self.input.param('disable_from_kv', False):
             populate_job_queue(dataset_objs, self.cbas_util_v2.disable_analytics_from_KV)
-            if self.parallel_load:
-                self.start_data_load_task(percentage_per_collection=int(self.parallel_load_percent / 2.5))
+            if self.parallel_load_percent:
+                self.start_data_load_task(
+                    percentage_per_collection=int(
+                        self.parallel_load_percent / 2.5))
             self.cbas_util_v2.run_jobs_in_parallel(self.cbas_util_v2.disable_analytics_from_KV, jobs, results, 1)
             self.wait_for_data_load_task()
             if not all(results):
@@ -807,8 +796,9 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             "no_of_synonyms": self.input.param('no_of_synonym', 10),
             "no_of_indexes": 0,
             "max_thread_count": self.input.param('no_of_threads', 1)}
-        if self.parallel_load:
-            self.start_data_load_task(percentage_per_collection=self.parallel_load_percent)
+        if self.parallel_load_percent:
+            self.start_data_load_task(
+                percentage_per_collection=self.parallel_load_percent)
         if self.run_concurrent_query:
             self.start_query_task()
         self.setup_for_test(update_spec, "dataset")
@@ -1245,21 +1235,17 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             doc_loading_spec = self.bucket_util.get_crud_template_from_package("initial_load")
             doc_loading_spec["doc_ttl"] = docTTL
         self.collectionSetUp(self.cluster, self.bucket_util, self.cluster_util, True, buckets_spec, doc_loading_spec)
-        self.bucket_util._expiry_pager()
-        if self.parallel_load:
-            self.start_data_load_task()
-        if self.run_concurrent_query:
-            self.start_query_task()
         if not self.cbas_util_v2.create_datasets_on_all_collections(
                 self.bucket_util, cbas_name_cardinality=3, kv_name_cardinality=3,
                 creation_methods=["cbas_collection", "cbas_dataset"]):
             self.fail("Dataset creation failed")
-        self.wait_for_query_task()
-        self.wait_for_data_load_task()
-        datasets = self.cbas_util_v2.list_all_dataset_objs()
-        self.wait_for_ingestion_all_datasets()
+        if not self.cbas_util_v2.wait_for_ingestion_all_datasets(
+                self.bucket_util):
+            self.fail("Ingestion failed")
+        self.bucket_util._expiry_pager()
         self.sleep(200, "waiting for maxTTL to complete")
         self.log.info("Validating item count")
+        datasets = self.cbas_util_v2.list_all_dataset_objs()
         for dataset in datasets:
             if docTTL:
                 if not self.cbas_util_v2.validate_cbas_dataset_items_count(dataset.full_name, 0):
@@ -1295,8 +1281,9 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             self.fail("Dataset creation failed")
         dataset_objs = self.cbas_util_v2.list_all_dataset_objs()
         count = 0
-        if self.parallel_load:
-            self.start_data_load_task(percentage_per_collection=self.parallel_load_percent)
+        if self.parallel_load_percent:
+            self.start_data_load_task(
+                percentage_per_collection=self.parallel_load_percent)
         if self.run_concurrent_query:
             self.start_query_task()
         for dataset in dataset_objs:
@@ -1550,6 +1537,8 @@ class CBASDatasetsAndCollections(CBASBaseTest):
             kv_name_cardinality=self.input.param('bucket_cardinality', None),
             creation_methods=["cbas_collection", "cbas_dataset"])
         self.task_manager.add_new_task(create_datasets_task)
+        if self.parallel_load_percent <= 0:
+            self.parallel_load_percent = 100
         self.start_data_load_task(percentage_per_collection=self.parallel_load_percent)
         self.start_query_task()
         self.wait_for_query_task()
@@ -1559,5 +1548,7 @@ class CBASDatasetsAndCollections(CBASBaseTest):
         if not dataset_creation_result:
             self.fail("Datasets creation failed")
         # Validate ingestion
-        self.wait_for_ingestion_all_datasets()
+        if not self.cbas_util_v2.wait_for_ingestion_all_datasets(
+                self.bucket_util):
+            self.fail("Ingestion failed")
         self.log.info("test_analytics_with_parallel_dataset_creation completed")
