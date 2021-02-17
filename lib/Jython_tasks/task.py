@@ -3,6 +3,7 @@ Created on Sep 14, 2017
 
 @author: riteshagarwal
 """
+import json
 import threading
 import zlib
 import copy
@@ -18,6 +19,7 @@ from _threading import Lock
 from BucketLib.BucketOperations import BucketHelper
 from BucketLib.MemcachedOperations import MemcachedHelper
 from BucketLib.bucket import Bucket
+from CbasLib.cbas_entity import Dataverse, CBAS_Collection, Dataset
 from cb_tools.cbstats import Cbstats
 from Cb_constants import constants, CbServer, DocLoading
 from common_lib import sleep
@@ -43,6 +45,8 @@ from table_view import TableView, plot_graph
 from reactor.util.function import Tuples
 from com.couchbase.client.java.json import JsonObject
 from testconstants import INDEX_QUOTA, FTS_QUOTA, CBAS_QUOTA, MIN_KV_QUOTA
+from CbasLib.CBASOperations import CBASHelper
+
 
 class Task(Callable):
     def __init__(self, thread_name):
@@ -1046,7 +1050,7 @@ class Durability(Task):
         gen_start = int(self.generator.start)
         gen_end = max(int(self.generator.end), 1)
         gen_range = max(int((
-                                        self.generator.end - self.generator.start) / self.process_concurrency),
+                                    self.generator.end - self.generator.start) / self.process_concurrency),
                         1)
         for pos in range(gen_start, gen_end, gen_range):
             partition_gen = copy.deepcopy(self.generator)
@@ -1260,7 +1264,7 @@ class Durability(Task):
                         doc = self.generator_persist._doc_gen.next()
                         key, val = doc[0], doc[1]
                         vBucket = (((zlib.crc32(key)) >> 16) & 0x7fff) & (
-                                    len(self.bucket.vbuckets) - 1)
+                                len(self.bucket.vbuckets) - 1)
                         nodes = [self.bucket.vbuckets[vBucket].master]
                         if self.durability \
                                 == Bucket.DurabilityLevel.PERSIST_TO_MAJORITY:
@@ -1275,13 +1279,13 @@ class Durability(Task):
                                     if key_stat["is_dirty"].lower() == "true":
                                         self.test_log.error(
                                             "Node: %s, Key: %s, key_is_dirty = %s" % (
-                                            node.split(":")[0], key,
-                                            key_stat["is_dirty"]))
+                                                node.split(":")[0], key,
+                                                key_stat["is_dirty"]))
                                     else:
                                         self.test_log.info(
                                             "Node: %s, Key: %s, key_is_dirty = %s" % (
-                                            node.split(":")[0], key,
-                                            key_stat["is_dirty"]))
+                                                node.split(":")[0], key,
+                                                key_stat["is_dirty"]))
                                         count += 1
                             except:
                                 pass
@@ -1318,13 +1322,13 @@ class Durability(Task):
                                             "is_dirty"].lower() == "true":
                                             self.test_log.error(
                                                 "Node: %s, Key: %s, key_is_dirty = %s" % (
-                                                node.split(":")[0], key,
-                                                key_stat["is_dirty"]))
+                                                    node.split(":")[0], key,
+                                                    key_stat["is_dirty"]))
                                         else:
                                             self.test_log.debug(
                                                 "Node: %s, Key: %s, key_is_dirty = %s" % (
-                                                node.split(":")[0], key,
-                                                key_stat["is_dirty"]))
+                                                    node.split(":")[0], key,
+                                                    key_stat["is_dirty"]))
                                             count += 1
                                 except:
                                     pass
@@ -1342,13 +1346,13 @@ class Durability(Task):
                                     if key_stat["is_dirty"].lower() == "true":
                                         self.test_log.error(
                                             "Node: %s, Key: %s, key_is_dirty = %s" % (
-                                            node.split(":")[0], key,
-                                            key_stat["is_dirty"]))
+                                                node.split(":")[0], key,
+                                                key_stat["is_dirty"]))
                                     else:
                                         self.test_log.debug(
                                             "Node: %s, Key: %s, key_is_dirty = %s" % (
-                                            node.split(":")[0], key,
-                                            key_stat["is_dirty"]))
+                                                node.split(":")[0], key,
+                                                key_stat["is_dirty"]))
                                         count += 1
                                 except Exception as e:
                                     pass
@@ -1399,7 +1403,7 @@ class Durability(Task):
                             result = self.client.get_from_all_replicas(key)
                             self.test_log.debug(
                                 "Key = %s getFromAllReplica = %s" % (
-                                key, result))
+                                    key, result))
                             if key not in self.create_failed.keys():
                                 if len(result) == 0:
                                     # if len(result) < self.majority_value:
@@ -2665,18 +2669,19 @@ class ViewCreateTask(Task):
                             self.set_exception(
                                 Exception(
                                     "design doc {0} doesn't contain spatial view {1}"
-                                    .format(self.design_doc_name,
-                                            self.view.name)))
+                                        .format(self.design_doc_name,
+                                                self.view.name)))
                             return 0
                     else:
                         if self.view.name not in json_parsed["views"].keys():
                             self.set_exception(Exception(
                                 "design doc {0} doesn't contain view {1}"
-                                .format(self.design_doc_name, self.view.name)))
+                                    .format(self.design_doc_name,
+                                            self.view.name)))
                             return 0
                 self.test_log.debug(
                     "View: {0} was created successfully in ddoc: {1}"
-                    .format(self.view.name, self.design_doc_name))
+                        .format(self.view.name, self.design_doc_name))
             else:
                 # If we are here, it means design doc was successfully updated
                 self.test_log.debug("Design Doc: {0} was updated successfully"
@@ -2748,20 +2753,21 @@ class ViewCreateTask(Task):
                     else:
                         self.test_log.debug(
                             "Design Doc {0} version is not updated on node {1}:{2}. Retrying."
-                            .format(self.design_doc_name,
-                                    node.ip, node.port))
+                                .format(self.design_doc_name,
+                                        node.ip, node.port))
                         sleep(2)
                 except ReadDocumentException as e:
                     if count < retry_count:
                         self.test_log.debug(
                             "Design Doc {0} not yet available on node {1}:{2}. Retrying."
-                            .format(self.design_doc_name,
-                                    node.ip, node.port))
+                                .format(self.design_doc_name,
+                                        node.ip, node.port))
                         sleep(2)
                     else:
                         self.test_log.error(
                             "Design Doc {0} failed to replicate on node {1}:{2}"
-                            .format(self.design_doc_name, node.ip, node.port))
+                                .format(self.design_doc_name, node.ip,
+                                        node.port))
                         self.set_exception(e)
                         break
                 except Exception as e:
@@ -2845,7 +2851,7 @@ class ViewDeleteTask(Task):
         except QueryViewException as e:
             self.test_log.debug(
                 "View: {0} was successfully deleted in ddoc: {1}"
-                .format(self.view.name, self.design_doc_name))
+                    .format(self.view.name, self.design_doc_name))
             return True
 
         # catch and set all unexpected exceptions
@@ -2926,7 +2932,7 @@ class ViewQueryTask(Task):
             if len(content['rows']) == self.expected_rows:
                 self.test_log.debug(
                     "Expected rows: '{0}' was found for view query"
-                    .format(self.expected_rows))
+                        .format(self.expected_rows))
                 return True
             else:
                 if len(content['rows']) > self.expected_rows:
@@ -3046,7 +3052,7 @@ class N1QLQueryTask(Task):
 class RunQueriesTask(Task):
     """
         Task that runs CBAS and N1QL queries
-        runs all the queries given in the queries list
+        runs all queries given in the queries list
         Parameters:
           server - server on which n1ql query should run (TestInputServer)
           queries - List of either cbas or n1ql queries (list)
@@ -3054,12 +3060,16 @@ class RunQueriesTask(Task):
           helper - helper object either cbas or n1ql(CbasUtilV2, CbasUtil,
           N1QLHelper)
           query_type - type of query legal values are cbas, n1ql (string)
+          is_prepared - Prepares the queries in the list if false (string)
+                -- Unprepared query eg:
+                select count(*) from {0} where mutated > 0;
     """
+
     def __init__(self, server, queries, task_manager, helper, query_type,
                  run_infinitely=False,
-                 parallelism=1):
+                 parallelism=1, is_prepared=True):
         super(RunQueriesTask, self).__init__("RunQueriesTask_started_%s"
-                                                 % (time.time()))
+                                             % (time.time()))
         self.server = server
         self.queries = queries
         self.query_type = query_type
@@ -3072,39 +3082,85 @@ class RunQueriesTask(Task):
         self.parallelism = parallelism
         self.query_tasks = []
         self.result = []
+        self.is_prepared = is_prepared
+        self.debug_msg = self.query_type + "-DEBUG-"
 
     def call(self):
         start = 0
         end = self.parallelism
         self.start_task()
-        while True:
-            for query in self.queries[start:end]:
-                if hasattr(self, "n1ql_helper"):
-                    query_task = N1QLQueryTask(self.server, "", query,
-                                               n1ql_helper=self.n1ql_helper,
-                                               verify_results=False,
-                                               is_explain_query=True)
-                    self.task_manager.add_new_task(query_task)
-                    self.query_tasks.append(query_task)
-                if hasattr(self, "cbas_util"):
-                    query_task = CBASQueryExecuteTask(None, self.cbas_util,
-                                                      None,
-                                                      query, None)
-                    self.task_manager.add_new_task(query_task)
-                    self.query_tasks.append(query_task)
-            for query_task in self.query_tasks:
-                self.task_manager.get_task_result(query_task)
-                if not self.run_infinitely:
-                    self.result.append(query_task.actual_result)
-                self.query_tasks.remove(query_task)
-            start = end
-            end += self.parallelism
-            if start >= len(self.queries):
-                if self.run_infinitely:
-                    start = 0
-                    end = self.parallelism
-                else:
-                    break
+        try:
+            if not self.is_prepared:
+                if self.query_type == "cbas":
+                    self.prepare_cbas_queries()
+                elif self.query_type == "n1ql":
+                    self.prepare_n1ql_queries()
+            while True:
+                for query in self.queries[start:end]:
+                    if hasattr(self, "n1ql_helper"):
+                        query_task = N1QLQueryTask(self.server, "", query,
+                                                   n1ql_helper=self.n1ql_helper,
+                                                   verify_results=False,
+                                                   is_explain_query=True)
+                        self.task_manager.add_new_task(query_task)
+                        self.query_tasks.append(query_task)
+                    if hasattr(self, "cbas_util"):
+                        query_task = CBASQueryExecuteTask(None, self.cbas_util,
+                                                          None,
+                                                          query, None)
+                        self.task_manager.add_new_task(query_task)
+                        self.query_tasks.append(query_task)
+                for query_task in self.query_tasks:
+                    self.task_manager.get_task_result(query_task)
+                    self.log.info(self.debug_msg + "ActualResult: " + str(
+                        query_task.actual_result))
+                    if not self.run_infinitely:
+                        self.result.append(query_task.actual_result)
+                self.query_tasks = []
+                start = end
+                end += self.parallelism
+                if start >= len(self.queries):
+                    if self.run_infinitely:
+                        start = 0
+                        end = self.parallelism
+                    else:
+                        break
+        except Exception as e:
+            self.test_log.error(e)
+            self.set_exception(e)
+            return
+        self.complete_task()
+
+    def prepare_cbas_queries(self):
+        datasets = self.cbas_util.get_datasets(retries=20)
+        if not datasets:
+            self.set_exception(Exception("Datasets not available"))
+        prepared_queries = []
+        for query in self.queries:
+            for dataset in datasets:
+                prepared_queries.append(query.format(CBASHelper.format_name(
+                    dataset)))
+        self.queries = prepared_queries
+        self.log.info(self.debug_msg + str(self.queries))
+
+    def prepare_n1ql_queries(self):
+        buckets = self.n1ql_helper.buckets
+        prepared_queries = []
+        bucket_helper = BucketHelper(self.server)
+        for bucket in buckets:
+            status, content = bucket_helper.list_collections(
+                bucket.name)
+            if status:
+                content = json.loads(content)
+                for scope in content["scopes"]:
+                    for collection in scope["collections"]:
+                        keyspace = CBASHelper.format_name(bucket.name,
+                                                          scope["name"],
+                                                          collection["name"])
+                        prepared_queries.extend([query.format(keyspace) for
+                                                 query in self.queries])
+        self.queries = prepared_queries
+
 
 class N1QLTxnQueryTask(Task):
     def __init__(self, stmts, n1ql_helper,
@@ -3302,7 +3358,7 @@ class DropIndexTask(Task):
             if not check:
                 raise DropIndexException(
                     "index {0} does not exist will not drop"
-                    .format(self.index_name))
+                        .format(self.index_name))
             self.n1ql_helper.run_cbq_query(query=self.query, server=self.server)
             return_value = self.check()
         except N1QLQueryException as e:
@@ -3472,7 +3528,7 @@ class BucketCreateTask(Task):
                                                   self.bucket.name):
                 self.test_log.debug(
                     "Bucket '{0}' created with per node RAM quota: {1}"
-                    .format(self.bucket, self.bucket.ramQuotaMB))
+                        .format(self.bucket, self.bucket.ramQuotaMB))
                 return True
             else:
                 self.test_log.error("Vbucket map not ready after try %s"
@@ -3482,7 +3538,7 @@ class BucketCreateTask(Task):
         except Exception as e:
             self.test_log.warn(
                 "Exception: {0}. vbucket map not ready after try {1}"
-                .format(e, self.retries))
+                    .format(e, self.retries))
             if self.retries >= 5:
                 self.result = False
                 self.test_log.error(str(e))
@@ -3641,7 +3697,8 @@ class MutateDocsFromSpecTask(Task):
                  sdk_client_pool,
                  batch_size=500,
                  process_concurrency=1,
-                 print_ops_rate=True):
+                 print_ops_rate=True,
+                 track_failures=True):
         super(MutateDocsFromSpecTask, self).__init__(
             "MutateDocsFromSpecTask_%s" % time.time())
         self.cluster = cluster
@@ -3657,6 +3714,7 @@ class MutateDocsFromSpecTask(Task):
 
         self.load_gen_task_lock = Lock()
         self.sdk_client_pool = sdk_client_pool
+        self.track_failures = track_failures
 
     def call(self):
         self.start_task()
@@ -3779,8 +3837,10 @@ class MutateDocsFromSpecTask(Task):
                     self.batch_size)
                 generators.append(batch_gen)
             for doc_gen in generators:
-                task_id = "%s_%s_%s_%s" % (self.thread_name, bucket.name,
-                                           scope_name, col_name)
+                task_id = "%s_%s_%s_%s_ttl=%s" % (self.thread_name,
+                                                  bucket.name,
+                                                  scope_name, col_name,
+                                                  op_data["doc_ttl"])
                 if op_type in DocLoading.Bucket.DOC_OPS:
                     doc_load_task = LoadDocumentsTask(
                         self.cluster, bucket, None, doc_gen,
@@ -5038,8 +5098,8 @@ class MonitorViewFragmentationTask(Task):
             content = rest.cluster_status()
 
         auto_compact_percentage = \
-        content["autoCompactionSettings"]["viewFragmentationThreshold"][
-            "percentage"]
+            content["autoCompactionSettings"]["viewFragmentationThreshold"][
+                "percentage"]
 
         return auto_compact_percentage
 
@@ -5409,6 +5469,7 @@ class CBASQueryExecuteTask(Task):
                 self.test_log.error("Error during CBAS query: %s" % errors)
                 self.set_result(False)
         except Exception as e:
+            self.log.error("CBASQueryExecuteTask EXCEPTION: " + e)
             self.set_result(False)
             self.set_exception(e)
 
@@ -5562,7 +5623,7 @@ class FailoverTask(Task):
             self._failover_nodes()
             self.test_log.debug(
                 "{0} seconds sleep after failover for nodes to go pending...."
-                .format(self.wait_for_pending))
+                    .format(self.wait_for_pending))
             sleep(self.wait_for_pending)
             self.set_result(True)
 
@@ -5578,8 +5639,8 @@ class FailoverTask(Task):
         for server in self.to_failover:
             for node in rest.node_statuses():
                 if (
-                server.hostname if self.use_hostnames else server.ip) == node.ip and int(
-                        server.port) == int(node.port):
+                        server.hostname if self.use_hostnames else server.ip) == node.ip and int(
+                    server.port) == int(node.port):
                     self.test_log.debug(
                         "Failing over {0}:{1} with graceful={2}"
                             .format(node.ip, node.port, self.graceful))
@@ -5620,3 +5681,134 @@ class BucketFlushTask(Task):
 
         except Exception as e:
             self.set_exception(e)
+
+
+class CreateDatasetsTask(Task):
+    def __init__(self, bucket_util, cbas_util, cbas_name_cardinality=1,
+                 kv_name_cardinality=1, remote_datasets=False,
+                 creation_methods=None):
+        super(CreateDatasetsTask, self).__init__(
+            "CreateDatasetsOnAllCollectionsTask")
+        self.bucket_util = bucket_util
+        self.cbas_name_cardinality = cbas_name_cardinality
+        self.kv_name_cardinality = kv_name_cardinality
+        self.remote_datasets = remote_datasets
+        if not creation_methods:
+            self.creation_methods = ["cbas_collection", "cbas_dataset",
+                                     "enable_cbas_from_kv"]
+        else:
+            self.creation_methods = creation_methods
+        self.cbas_util = cbas_util
+        if remote_datasets:
+            self.remote_link_objs = self.cbas_util.list_all_link_objs(
+                "couchbase")
+            self.creation_methods.remove("enable_cbas_from_kv")
+
+    def call(self):
+        self.start_task()
+        try:
+            for bucket in self.bucket_util.buckets:
+                if self.kv_name_cardinality > 1:
+                    for scope in self.bucket_util.get_active_scopes(bucket):
+                        for collection in \
+                                self.bucket_util.get_active_collections(
+                                bucket, scope.name):
+                            self.init_dataset_creation(bucket, scope,
+                                                       collection)
+                else:
+                    scope = self.bucket_util.get_scope_obj(bucket, "_default")
+                    self.init_dataset_creation(bucket, scope,
+                                               self.bucket_util.get_collection_obj(
+                                                   scope, "_default"))
+            self.set_result(True)
+            self.complete_task()
+        except Exception as e:
+            self.test_log.error(e)
+            self.set_exception(e)
+        return self.result
+
+    def init_dataset_creation(self, bucket, scope, collection):
+        creation_method = random.choice(self.creation_methods)
+
+        if self.remote_datasets:
+            link_name = random.choice(self.remote_link_objs).full_name
+        else:
+            link_name = None
+
+        name = self.cbas_util.generate_name(name_cardinality=1)
+
+        if creation_method == "enable_cbas_from_kv":
+            enabled_from_KV = True
+            dataverse = Dataverse(bucket.name + "." + scope.name)
+            self.cbas_util.dataverses[dataverse.name] = dataverse
+            name = CBASHelper.format_name(collection.name)
+        else:
+            enabled_from_KV = False
+            if self.cbas_name_cardinality > 1:
+                dataverse = Dataverse(self.cbas_util.generate_name(
+                    self.cbas_name_cardinality - 1))
+            else:
+                dataverse = self.cbas_util.get_dataverse_obj("Default")
+
+        num_of_items = collection.num_items
+
+        if creation_method == "cbas_collection":
+            dataset_obj = CBAS_Collection(
+                name=name, dataverse_name=dataverse.name, link_name=link_name,
+                dataset_source="internal", dataset_properties={},
+                bucket=bucket, scope=scope, collection=collection,
+                enabled_from_KV=enabled_from_KV, num_of_items=num_of_items)
+        else:
+            dataset_obj = Dataset(
+                name=name, dataverse_name=dataverse.name,
+                dataset_source="internal", dataset_properties={},
+                bucket=bucket, scope=scope, collection=collection,
+                enabled_from_KV=enabled_from_KV, num_of_items=num_of_items,
+                link_name=link_name)
+        if not self.create_dataset(dataset_obj):
+            raise N1QLQueryException(
+                "Could not create dataset " + dataset_obj.name + " on " +
+                dataset_obj.dataverse_name)
+        dataverse.datasets[dataset_obj.full_name] = dataset_obj
+        self.cbas_util.dataverses[dataverse.name] = dataverse
+
+    def create_dataset(self, dataset):
+        dataverse_name = dataset.dataverse_name
+        if dataverse_name == "Default":
+            dataverse_name = None
+        if dataset.enabled_from_KV:
+            if self.kv_name_cardinality > 1:
+                return self.cbas_util.enable_analytics_from_KV(
+                    dataset.full_kv_entity_name, False, False, None, None,
+                    None, 120, 120)
+            else:
+                return self.cbas_util.enable_analytics_from_KV(
+                    dataset.get_fully_qualified_kv_entity_name(1), False,
+                    False, None, None, None, 120, 120)
+        else:
+            if isinstance(dataset, CBAS_Collection):
+                analytics_collection = True
+            elif isinstance(dataset, Dataset):
+                analytics_collection = False
+            if self.kv_name_cardinality > 1 and self.cbas_name_cardinality > 1:
+                return self.cbas_util.create_dataset(
+                    dataset.name, dataset.full_kv_entity_name, dataverse_name,
+                    False, False, None, dataset.link_name, None, False, None,
+                    None, None, 120, 120, analytics_collection)
+            elif self.kv_name_cardinality > 1 and \
+                    self.cbas_name_cardinality == 1:
+                return self.cbas_util.create_dataset(
+                    dataset.name, dataset.full_kv_entity_name, None, False,
+                    False, None, dataset.link_name, None, False, None, None,
+                    None, 120, 120, analytics_collection)
+            elif self.kv_name_cardinality == 1 and \
+                    self.cbas_name_cardinality > 1:
+                return self.cbas_util.create_dataset(
+                    dataset.name, dataset.get_fully_qualified_kv_entity_name(1),
+                    dataverse_name, False, False, None, dataset.link_name, None,
+                    False, None, None, None, 120, 120, analytics_collection)
+            else:
+                return self.cbas_util.create_dataset(
+                    dataset.name, dataset.get_fully_qualified_kv_entity_name(1),
+                    None, False, False, None, dataset.link_name, None, False,
+                    None, None, None, 120, 120, analytics_collection)

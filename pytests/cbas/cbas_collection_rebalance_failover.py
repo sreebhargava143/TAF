@@ -13,7 +13,8 @@ class CBASRebalance(CBASBaseTest):
         self.input = TestInputSingleton.input
         if "bucket_spec" not in self.input.test_params:
             self.input.test_params.update({"bucket_spec": "analytics.default"})
-        if "set_cbas_memory_from_available_free_memory" not in self.input.test_params:
+        if "set_cbas_memory_from_available_free_memory" not in \
+                self.input.test_params:
             self.input.test_params.update(
                 {"set_cbas_memory_from_available_free_memory": True})
         super(CBASRebalance, self).setUp()
@@ -27,14 +28,12 @@ class CBASRebalance(CBASBaseTest):
             self.input.param("vbucket_check", True), self.cbas_util_v2)
         CBASRebalanceUtil.exclude_nodes.extend(
             [self.cluster.master, self.cbas_node])
-        self.rebalance_util.run_parallel_kv_query = self.input.param(
+        self.run_parallel_kv_query = self.input.param(
             "run_kv_queries", False)
-        self.rebalance_util.run_parallel_cbas_query = self.input.param(
+        self.run_parallel_cbas_query = self.input.param(
             "run_cbas_queries", False)
         self.rebalance_util.durability_level = self.durability_level
         CBASRebalanceUtil.query_interval = self.input.param("query_interval", 3)
-        CBASRebalanceUtil.no_of_parallel_queries = self.input.param(
-            "no_of_parallel_queries", 1)
         CBASRebalanceUtil.available_servers = list(
             set(self.cluster.servers).difference(
                 set(self.rebalance_util.cluster.nodes_in_cluster)))
@@ -49,7 +48,9 @@ class CBASRebalance(CBASBaseTest):
         if not self.cbas_util_v2.create_cbas_infra_from_spec(self.cbas_spec,
                                                              self.bucket_util):
             self.fail("Error while creating infra from CBAS spec")
-        self.rebalance_util.start_parallel_queries()
+        self.rebalance_util.start_parallel_queries(
+            self.run_parallel_kv_query, self.run_parallel_cbas_query,
+            self.num_concurrent_queries)
         self.log_setup_status(self.__class__.__name__, "Finished",
                               stage=self.setUp.__name__)
 
@@ -86,17 +87,14 @@ class CBASRebalance(CBASBaseTest):
             if not self.rebalance_util.wait_for_data_load_to_complete(
                     data_load_task, self.skip_validations):
                 self.fail("Doc loading failed")
-        self.rebalance_util.data_validation_collection(
-            skip_validations=self.skip_validations,
-            doc_and_collection_ttl=False)
         if self.data_load_stage == "after":
             if not self.rebalance_util.data_load_collection(
                     self.doc_spec_name, self.skip_validations,
                     async_load=False):
                 self.fail("Doc loading failed")
-            self.rebalance_util.data_validation_collection(
-                skip_validations=self.skip_validations,
-                doc_and_collection_ttl=False)
+        self.rebalance_util.data_validation_collection(
+            skip_validations=self.skip_validations,
+            doc_and_collection_ttl=False)
         self.bucket_util.print_bucket_stats()
         if not self.cbas_util_v2.validate_docs_in_all_datasets(
                 self.bucket_util):
@@ -106,7 +104,8 @@ class CBASRebalance(CBASBaseTest):
                                        action="RebalanceOut",
                                        service_type="cbas"):
         self.log.info(
-            "{0} Failover a node and {1} that node with data load in parallel".format(
+            "{0} Failover a node and {1} that node with data load in "
+            "parallel".format(
                 failover_type, action))
         if self.data_load_stage == "before":
             if not self.rebalance_util.data_load_collection(

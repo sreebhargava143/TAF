@@ -89,7 +89,6 @@ class CBASBaseTest(BaseTestCase):
         self.doc_spec_name = self.input.param("doc_spec_name", "initial_load")
         self.set_cbas_memory_from_available_free_memory = self.input.param(
             'set_cbas_memory_from_available_free_memory', False)
-        self.parallel_load = self.input.param("parallel_load", False)
         self.parallel_load_percent = int(self.input.param(
             "parallel_load_percent", 0))
         self.cbas_node = None
@@ -99,6 +98,12 @@ class CBASBaseTest(BaseTestCase):
         if hasattr(self, "cluster"):
             self.cluster.nodes_in_cluster.extend([self.cluster.master])
             if self.services_init and self.nodes_init >= 3:
+                if len(self.cluster.servers) < self.nodes_init or \
+                        len(self.services_init.split("-")) != self.nodes_init:
+                    self.fail("Configuration error. Re-check nodes_init, "
+                              "services_init in .conf file and servers "
+                              "available in .ini "
+                              "file")
                 services = list()
                 for service in self.services_init.split("-")[1:self.nodes_init]:
                     services.append(service.replace(":", ","))

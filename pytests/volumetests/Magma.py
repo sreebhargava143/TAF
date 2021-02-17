@@ -25,8 +25,8 @@ import time
 from membase.api.exception import RebalanceFailedException
 import math
 import subprocess
-import os
 from math import ceil
+from Jython_tasks.task_manager import TaskManager
 
 
 class volume(BaseTestCase):
@@ -49,9 +49,12 @@ class volume(BaseTestCase):
         self.expire_start = 0
 
     def setUp(self):
-        self.input = TestInputSingleton.input
+        BaseTestCase.setUp(self)
         self.init_doc_params()
+
         self.num_collections = self.input.param("num_collections", 1)
+        self.num_scopes = self.input.param("num_scopes", 1)
+        self.num_buckets = self.input.param("num_buckets", 1)
         self.doc_ops = self.input.param("doc_ops", "create")
         if self.doc_ops:
             self.doc_ops = self.doc_ops.split(':')
@@ -59,15 +62,13 @@ class volume(BaseTestCase):
         process_concurrency = int(math.ceil(self.max_tasks_per_collection /
                                             float(len(self.doc_ops))))
         process_concurrency = self.input.param("pc", process_concurrency)
-        main_tasks = (self.num_collections+1) * len(self.doc_ops)
-        sub_tasks = main_tasks * process_concurrency
-        self.thread_to_use = main_tasks + sub_tasks + 10
+        doc_tasks = (self.num_buckets*self.num_scopes*self.num_collections) * len(self.doc_ops) * process_concurrency + 1
+        self.thread_to_use = min(64, doc_tasks)
         self.input.test_params.update({"threads_to_use":
                                        self.thread_to_use})
-        print "Total workers = {}".format(self.thread_to_use)
-        print "Total Main Task = {}".format(main_tasks)
-        print "Total Sub-Tasks = {}".format(sub_tasks)
-        BaseTestCase.setUp(self)
+        print "Total Doc-Tasks workers = {}".format(self.thread_to_use)
+        print "Total Doc-Tasks = {}".format(doc_tasks)
+        self.doc_loading_tm = TaskManager(number_of_threads=self.thread_to_use)
         self.process_concurrency = self.input.param("pc", process_concurrency)
 
         self.rest = RestConnection(self.servers[0])
@@ -110,7 +111,7 @@ class volume(BaseTestCase):
             self.cluster.nodes_in_cluster.extend([self.cluster.master])
         #######################################################################
         self.PrintStep("Step 2: Create required buckets and collections.")
-        self.bucket = self.create_required_buckets()
+        self.create_required_buckets()
         props = "magma"
         update_bucket_props = False
 
@@ -146,27 +147,41 @@ class volume(BaseTestCase):
                                           self.bucket,
                                           {"name": self.scope_name})
 
-        if self.num_collections > 1:
-            self.collection_prefix = self.input.param("collection_prefix",
-                                                      "Volume")
-
-            for i in range(self.num_collections):
-                collection_name = self.collection_prefix + str(i)
-                self.log.info("Creating scope::collection '%s::%s'"
-                              % (self.scope_name, collection_name))
-                self.bucket_util.create_collection(self.cluster.master,
-                                                   self.bucket,
-                                                   self.scope_name,
-                                                   {"name": collection_name})
-                self.sleep(0.5)
-            self.num_collections += 1
+        if self.num_scopes > 1:
+            self.scope_prefix = self.input.param("scope_prefix",
+                                                 "VolumeScope")
+            for bucket in self.bucket_util.buckets:
+                for i in range(self.num_scopes):
+                    scope_name = self.scope_prefix + str(i)
+                    self.log.info("Creating scope: %s"
+                                  % (scope_name))
+                    self.bucket_util.create_scope(self.cluster.master,
+                                                  bucket,
+                                                  {"name": scope_name})
+                    self.sleep(0.5)
+            self.num_scopes += 1
+        for bucket in self.bucket_util.buckets:
+            for scope in bucket.scopes.keys():
+                if self.num_collections > 1:
+                    self.collection_prefix = self.input.param("collection_prefix",
+                                                              "VolumeCollection")
+    
+                    for i in range(self.num_collections):
+                        collection_name = self.collection_prefix + str(i)
+                        self.bucket_util.create_collection(self.cluster.master,
+                                                           bucket,
+                                                           scope,
+                                                           {"name": collection_name})
+                        self.sleep(0.5)
+#         self.num_collections += 1
         self.rest = RestConnection(self.cluster.master)
         self.assertTrue(self.rest.update_autofailover_settings(False, 600),
                         "AutoFailover disabling failed")
 
         if self.sdk_client_pool:
-            max_clients = max(self.num_collections/10,
-                              min(self.task_manager.number_of_threads, 20))
+            max_clients = min(self.task_manager.number_of_threads,
+                              self.num_buckets*self.num_scopes*self.num_collections,
+                              20)
             clients_per_bucket = int(ceil(max_clients / self.num_buckets))
             for bucket in self.bucket_util.buckets:
                 self.sdk_client_pool.create_clients(
@@ -198,14 +213,13 @@ class volume(BaseTestCase):
         self.log.info("Create CB buckets")
         self.bucket_expiry = self.input.param("bucket_expiry", 0)
         ramQuota = self.input.param("ramQuota", kv_memory)
-        buckets = self.input.param("bucket_names",
-                                   "GleamBookUsers").split(';')
-        self.bucket_type = self.bucket_type.split(';')
-        self.compression_mode = self.compression_mode.split(';')
+        buckets = ["GleamBookUsers"]*self.num_buckets
+        self.bucket_type = self.bucket_type.split(';')*self.num_buckets
+        self.compression_mode = self.compression_mode.split(';')*self.num_buckets
         self.bucket_eviction_policy = self.bucket_eviction_policy
         for i in range(self.num_buckets):
             bucket = Bucket(
-                {Bucket.name: buckets[i],
+                {Bucket.name: buckets[i] + str(i),
                  Bucket.ramQuotaMB: ramQuota/self.num_buckets,
                  Bucket.maxTTL: self.bucket_expiry,
                  Bucket.replicaNumber: self.num_replicas,
@@ -222,7 +236,6 @@ class volume(BaseTestCase):
         self.rest.rebalance(otpNodes=[node.id for node in self.nodes],
                             ejectedNodes=[])
         self.rest.monitorRebalance()
-        return bucket
 
     def set_num_writer_and_reader_threads(self, num_writer_threads="default",
                                           num_reader_threads="default"):
@@ -297,7 +310,7 @@ class volume(BaseTestCase):
                 randomize_doc_size=self.randomize_doc_size,
                 randomize_value=self.randomize_value,
                 mix_key_size=self.mix_key_size)
-            self.final_items -= (self.delete_end - self.delete_start) * self.num_collections
+            self.final_items -= (self.delete_end - self.delete_start) * self.num_collections * self.num_scopes
 
         if "expiry" in doc_ops:
             if self.maxttl == 0:
@@ -323,7 +336,7 @@ class volume(BaseTestCase):
                 randomize_doc_size=self.randomize_doc_size,
                 randomize_value=self.randomize_value,
                 mix_key_size=self.mix_key_size)
-            self.final_items -= (self.expire_end - self.expire_start) * self.num_collections
+            self.final_items -= (self.expire_end - self.expire_start) * self.num_collections * self.num_scopes
 
         if "create" in doc_ops:
             if create_start is not None:
@@ -348,71 +361,93 @@ class volume(BaseTestCase):
                 randomize_doc_size=self.randomize_doc_size,
                 randomize_value=self.randomize_value,
                 mix_key_size=self.mix_key_size)
-            self.final_items += (abs(self.create_end - self.create_start)) * self.num_collections
+            self.final_items += (abs(self.create_end - self.create_start)) * self.num_collections * self.num_scopes
 
-    def doc_loader(self, op_type, kv_gen, exp=0, scope=None, collection=None):
-        if scope is None:
-            scope = CbServer.default_scope
-        if collection is None:
-            collection = CbServer.default_collection
+    def doc_loader(self, loader_spec):
         retry_exceptions = [
             SDKException.AmbiguousTimeoutException,
             SDKException.RequestCanceledException,
             SDKException.ServerOutOfMemoryException
         ]
-        tasks_info = self.bucket_util._async_load_all_buckets(
-            self.cluster, kv_gen, op_type, exp,
-            batch_size=self.batch_size,
+        task = self.task.async_load_gen_docs_from_spec(
+            self.cluster, self.doc_loading_tm, loader_spec,
+            self.sdk_client_pool,
+            batch_size=1000,
             process_concurrency=self.process_concurrency,
-            persist_to=self.persist_to, replicate_to=self.replicate_to,
-            durability=self.durability_level, pause_secs=5,
-            timeout_secs=self.sdk_timeout, retries=self.sdk_retries,
-            retry_exceptions=retry_exceptions,
-            skip_read_on_error=self.skip_read_on_error,
-            suppress_error_table=self.suppress_error_table,
-            scope=scope, collection=collection,
-            track_failures=self.track_failures,
-            sdk_client_pool=self.sdk_client_pool)
-        return tasks_info
+            print_ops_rate=True,
+            start_task=True,
+            track_failures=self.track_failures)
 
-    def data_load(self,
-                  scope=CbServer.default_scope,
-                  collections=[CbServer.default_scope]):
+#         tasks_info = self.bucket_util._async_load_all_buckets(
+#             self.cluster, kv_gen, op_type, exp,
+#             batch_size=self.batch_size,
+#             process_concurrency=self.process_concurrency,
+#             persist_to=self.persist_to, replicate_to=self.replicate_to,
+#             durability=self.durability_level, pause_secs=5,
+#             timeout_secs=self.sdk_timeout, retries=self.sdk_retries,
+#             retry_exceptions=retry_exceptions,
+#             skip_read_on_error=self.skip_read_on_error,
+#             suppress_error_table=self.suppress_error_table,
+#             scope=scope, collection=collection,
+#             track_failures=self.track_failures,
+#             sdk_client_pool=self.sdk_client_pool)
+        return task
+
+    def data_load(self):
+        loader_dict = dict()
+        retry_exceptions = [
+            SDKException.AmbiguousTimeoutException,
+            SDKException.RequestCanceledException,
+            SDKException.ServerOutOfMemoryException
+        ]
+        common_params = {"retry_exceptions": retry_exceptions,
+                         "suppress_error_table": self.suppress_error_table,
+                         "durability_level": self.durability_level,
+                         "skip_read_success_results": False,
+                         "target_items": 5000,
+                         "skip_read_on_error": self.skip_read_on_error,
+                         "ignore_exceptions": [],
+                         "sdk_timeout_unit": "seconds",
+                         "sdk_timeout": 60,
+                         "doc_ttl": 0,
+                         "doc_gen_type": "default"}
         tasks_info = dict()
-        for collection in collections:
-            if self.gen_update is not None:
-                task_info = self.doc_loader("update", self.gen_update,
-                                            scope=scope,
-                                            collection=collection)
-                tasks_info.update(task_info.items())
-            if self.gen_create is not None:
-                task_info = self.doc_loader("create", self.gen_create,
-                                            scope=scope,
-                                            collection=collection)
-                tasks_info.update(task_info.items())
-            if self.gen_delete is not None:
-                task_info = self.doc_loader("delete", self.gen_delete,
-                                            scope=scope,
-                                            collection=collection)
-                tasks_info.update(task_info.items())
-            if self.gen_expiry is not None and self.maxttl:
-                task_info = self.doc_loader("update", self.gen_expiry,
-                                            self.maxttl,
-                                            scope=scope,
-                                            collection=collection)
-                tasks_info.update(task_info.items())
-        return tasks_info
+        for bucket in self.bucket_util.buckets:
+            loader_dict.update({bucket: dict()})
+            loader_dict[bucket].update({"scopes": dict()})
+            for scope in bucket.scopes.keys():
+                loader_dict[bucket]["scopes"].update({scope: dict()})
+                loader_dict[bucket]["scopes"][scope].update({"collections":dict()})
+                for collection in bucket.scopes[scope].collections.keys():
+                    if collection == "_default" and scope != "default":
+                        continue
+                    loader_dict[bucket]["scopes"][scope]["collections"].update({collection:dict()})
+                    if self.gen_update is not None:
+                        op_type = "update"
+                        common_params.update({"doc_gen":self.gen_update})
+                    if self.gen_create is not None:
+                        op_type = "create"
+                        common_params.update({"doc_gen":self.gen_create})
+                    if self.gen_delete is not None:
+                        op_type = "delete"
+                        common_params.update({"doc_gen":self.gen_delete})
+                    if self.gen_expiry is not None and self.maxttl:
+                        op_type = "update"
+                        common_params.update({"doc_gen":self.gen_expiry,
+                                              "doc_ttl":self.maxttl})
+                    loader_dict[bucket]["scopes"][scope]["collections"][collection].update({op_type:common_params})
+        return self.doc_loader(loader_dict)
 
-    def wait_for_doc_load_completion(self, tasks_info, wait_for_stats=True):
-        for task in tasks_info:
-            self.task_manager.get_task_result(task)
-        self.bucket_util.verify_doc_op_task_exceptions(tasks_info,
-                                                       self.cluster)
-        self.bucket_util.log_doc_ops_task_failures(tasks_info)
-        for task, task_info in tasks_info.items():
-            self.assertFalse(
-                task_info["ops_failed"],
-                "Doc ops failed for task: {}".format(task.thread_name))
+    def wait_for_doc_load_completion(self, task, wait_for_stats=True):
+#         for task in tasks_info:
+        self.doc_loading_tm.get_task_result(task)
+        self.bucket_util.validate_doc_loading_results(task)
+#         self.bucket_util.verify_doc_op_task_exceptions(tasks_info,
+#                                                        self.cluster)
+#         self.bucket_util.log_doc_ops_task_failures(tasks_info)
+#         for task, task_info in tasks_info.items():
+        self.assertTrue(task.result,
+                        "Doc ops failed for task: {}".format(task.thread_name))
 
         if wait_for_stats:
             try:
@@ -429,8 +464,8 @@ class volume(BaseTestCase):
             print gdb_out
             gdb_shell.disconnect()
 
-    def data_validation(self, scope=CbServer.default_scope,
-                        collections=[CbServer.default_scope]):
+    def data_validation(self):
+        return
         self.log.info("Validating Active/Replica Docs")
         self.check_replica = False
         for bucket in self.bucket_util.buckets:
@@ -577,22 +612,18 @@ class volume(BaseTestCase):
 
     def perform_load(self, crash=False, num_kills=1, wait_for_load=True,
                      validate_data=True):
-        tasks_info = self.data_load(
-            scope=self.scope_name,
-            collections=self.bucket.scopes[self.scope_name].collections.keys())
+        task = self.data_load()
 
         if wait_for_load:
-            self.wait_for_doc_load_completion(tasks_info)
+            self.wait_for_doc_load_completion(task)
         else:
-            return tasks_info
+            return task
 
         if crash:
             self.kill_memcached(num_kills=num_kills)
 
         if validate_data:
-            self.data_validation(scope=self.scope_name,
-                                 collections=self.bucket.
-                                 scopes[self.scope_name].collections.keys())
+            self.data_validation()
 
         self.print_stats()
         result = self.check_coredump_exist(self.cluster.nodes_in_cluster)
@@ -603,12 +634,13 @@ class volume(BaseTestCase):
                 self.assertFalse(result)
 
     def print_stats(self):
-        self.get_magma_disk_usage()
         self.bucket_util.print_bucket_stats()
         self.print_crud_stats()
-        self.get_bucket_dgm(self.bucket)
-        if self.bucket.storageBackend == Bucket.StorageBackend.magma:
-            self.check_fragmentation_using_magma_stats(self.bucket)
+        for bucket in self.bucket_util.buckets:
+            self.get_bucket_dgm(bucket)
+            if bucket.storageBackend == Bucket.StorageBackend.magma:
+                self.get_magma_disk_usage(bucket)
+                self.check_fragmentation_using_magma_stats(bucket)
 
     def check_fragmentation_using_magma_stats(self, bucket, servers=None):
         result = dict()
@@ -711,6 +743,7 @@ class volume(BaseTestCase):
             self.crash_count += 1
             if self.crash_count > self.crashes:
                 self.stop_crash = True
+        self.sleep(300)
 
     def kill_memcached(self, servers=None, num_kills=1,
                        graceful=False, wait=True):
@@ -757,19 +790,20 @@ class volume(BaseTestCase):
             count += 1
 
     def check_warmup_complete(self, server):
-        start_time = time.time()
-        result = self.bucket_util._wait_warmup_completed(
-                            [server],
-                            self.bucket_util.buckets[0],
-                            wait_time=self.wait_timeout * 20)
-        if not result:
-            self.stop_crash = True
-            self.task.jython_task_manager.abort_all_tasks()
-            self.assertTrue(result, "Warm-up failed in %s seconds"
-                            % (self.wait_timeout * 20))
-        else:
-            self.log.info("Bucket warm-up completed in %s." %
-                          str(time.time() - start_time))
+        for bucket in self.bucket_util.buckets:
+            start_time = time.time()
+            result = self.bucket_util._wait_warmup_completed(
+                                [server],
+                                self.bucket_util.buckets[0],
+                                wait_time=self.wait_timeout * 20)
+            if not result:
+                self.stop_crash = True
+                self.task.jython_task_manager.abort_all_tasks()
+                self.assertTrue(result, "Warm-up failed in %s seconds"
+                                % (self.wait_timeout * 20))
+            else:
+                self.log.info("Bucket:%s warm-up completed in %s." %
+                              (bucket.name, str(time.time() - start_time)))
 
     def perform_rollback(self, start=None, mem_only_items=100000,
                          doc_type="create", kill_rollback=1):
@@ -778,6 +812,7 @@ class volume(BaseTestCase):
         rollbacks = self.input.param("rollbacks", 2)
 #         mem_only_items = random.randint(mem_only_items, mem_only_items*2)
         _iter = 0
+        self.gen_create, self.gen_update, self.gen_delete, self.gen_expiry = [None]*4
         while _iter < rollbacks:
             self.PrintStep("Rollback with %s: %s" % (doc_type,
                                                      str(_iter)))
@@ -792,6 +827,7 @@ class volume(BaseTestCase):
             cbstats = Cbstats(shell)
             target_vbucket = cbstats.vbucket_list(self.bucket_util.buckets[0].
                                                   name)
+
             gen_docs = doc_generator(
                 self.key_prefix,
                 start, mem_only_items,
@@ -803,20 +839,24 @@ class volume(BaseTestCase):
                 randomize_doc_size=self.randomize_doc_size,
                 randomize_value=self.randomize_value,
                 mix_key_size=self.mix_key_size)
+
+            if doc_type == "create":
+                self.gen_create = gen_docs
+            if doc_type == "update":
+                self.gen_update = gen_docs
+            if doc_type == "delete":
+                self.gen_delete = gen_docs
             if doc_type == "expiry":
+                self.gen_expiry = gen_docs
                 if self.maxttl == 0:
                     self.maxttl = self.input.param("maxttl", 10)
                 doc_type = "update"
 
-            for collection in self.bucket.scopes[self.scope_name].collections.keys():
-                tasks_info.update(self.doc_loader(doc_type, gen_docs,
-                                                  exp=self.maxttl,
-                                                  scope=self.scope_name,
-                                                  collection=collection))
-            self.wait_for_doc_load_completion(tasks_info, wait_for_stats=False)
-            del gen_docs
+            task = self.perform_load(wait_for_load=False)
+            self.wait_for_doc_load_completion(task, wait_for_stats=False)
             ep_queue_size_map = {node: mem_only_items *
-                                 len(self.bucket.scopes[self.scope_name].collections)}
+                                 self.num_scopes *
+                                 self.num_collections}
             vb_replica_queue_size_map = {node: 0}
 
             for server in self.cluster.nodes_in_cluster:
@@ -838,10 +878,7 @@ class volume(BaseTestCase):
             self.bucket_util.verify_stats_all_buckets(self.final_items,
                                                       timeout=3600)
 
-            self.get_magma_disk_usage()
-            self.bucket_util.print_bucket_stats()
-            self.print_crud_stats()
-            self.get_bucket_dgm(self.bucket)
+            self.print_stats()
             _iter += 1
 
     def pause_rebalance(self):
@@ -867,7 +904,7 @@ class volume(BaseTestCase):
         return rebalance_task
 
     def abort_rebalance(self, rebalance, error_type="kill_memcached"):
-        self.sleep(10, "Let the rebalance begin!")
+        self.sleep(30, "Let the rebalance begin!")
         rest = RestConnection(self.cluster.master)
         i = 1
         expected_progress = 20
@@ -919,9 +956,7 @@ class volume(BaseTestCase):
         #######################################################################
         def end_step_checks(tasks):
             self.wait_for_doc_load_completion(tasks)
-            self.data_validation(scope=self.scope_name,
-                                 collections=self.bucket.
-                                 scopes[self.scope_name].collections.keys())
+            self.data_validation()
 
             self.print_stats()
             result = self.check_coredump_exist(self.cluster.nodes_in_cluster)
@@ -1148,21 +1183,18 @@ class volume(BaseTestCase):
             self.delete_perc = 0
             self.expiry_perc = 100
             self.generate_docs(doc_ops=["create", "update", "delete", "expiry"])
-            tasks_info = self.data_load(
-                scope=self.scope_name,
-                collections=self.bucket.scopes[self.scope_name].collections.keys())
+            tasks_info = self.data_load()
             self.success_failed_over = self.rest.fail_over(self.chosen[0].id,
                                                            graceful=True)
             self.sleep(10)
-            self.rest.monitorRebalance()
+            self.assertTrue(self.rest.monitorRebalance(), msg="Failover -> Rebalance failed")
             self.nodes = self.rest.node_statuses()
             self.set_num_writer_and_reader_threads(
                 num_writer_threads=self.new_num_writer_threads,
                 num_reader_threads=self.new_num_reader_threads)
             self.rest.rebalance(otpNodes=[node.id for node in self.nodes],
                                 ejectedNodes=[self.chosen[0].id])
-            self.assertTrue(self.rest.monitorRebalance(stop_if_loop=True),
-                            msg="Rebalance failed")
+            self.assertTrue(self.rest.monitorRebalance(), msg="Rebalance failed")
 
             servs_out = [node for node in self.cluster.servers
                          if node.ip == self.chosen[0].ip]
@@ -1227,14 +1259,12 @@ class volume(BaseTestCase):
                                                        howmany=1)
 
             self.generate_docs(doc_ops=["create", "update", "delete", "expiry"])
-            tasks_info = self.data_load(
-                scope=self.scope_name,
-                collections=self.bucket.scopes[self.scope_name].collections.keys())
+            tasks_info = self.data_load()
             # Mark Node for failover
             self.success_failed_over = self.rest.fail_over(self.chosen[0].id,
                                                            graceful=True)
             self.sleep(10)
-            self.rest.monitorRebalance()
+            self.assertTrue(self.rest.monitorRebalance(), msg="Failover -> Rebalance failed")
             # Mark Node for full recovery
             if self.success_failed_over:
                 self.rest.set_recovery_type(otpNode=self.chosen[0].id,
@@ -1299,9 +1329,7 @@ class volume(BaseTestCase):
                                                        howmany=1)
 
             self.generate_docs(doc_ops=["create", "update", "delete", "expiry"])
-            tasks_info = self.data_load(
-                scope=self.scope_name,
-                collections=self.bucket.scopes[self.scope_name].collections.keys())
+            tasks_info = self.data_load()
             # Mark Node for failover
             self.success_failed_over = self.rest.fail_over(self.chosen[0].id,
                                                            graceful=True)
@@ -1363,9 +1391,7 @@ class volume(BaseTestCase):
 
             self.generate_docs(doc_ops=["create", "update", "delete", "expiry"])
             rebalance_task = self.rebalance(nodes_in=1, nodes_out=0)
-            tasks_info = self.data_load(
-                scope=self.scope_name,
-                collections=self.bucket.scopes[self.scope_name].collections.keys())
+            tasks_info = self.data_load()
 
             self.task.jython_task_manager.get_task_result(rebalance_task)
             self.assertTrue(rebalance_task.result, "Rebalance Failed")
@@ -1398,9 +1424,7 @@ class volume(BaseTestCase):
             rebalance_task = self.task.async_rebalance(self.cluster.servers,
                                                        [], [],
                                                        retry_get_process_num=100)
-            tasks_info = self.data_load(
-                scope=self.scope_name,
-                collections=self.bucket.scopes[self.scope_name].collections.keys())
+            tasks_info = self.data_load()
 
             self.task.jython_task_manager.get_task_result(rebalance_task)
             self.assertTrue(rebalance_task.result, "Rebalance Failed")
@@ -1648,15 +1672,17 @@ class volume(BaseTestCase):
             self.PrintStep("Step 13: Drop a collection")
             count = 0
             total_collections = self.num_collections
-            for i in range(1, total_collections-1, 2):
-                collection_name = self.collection_prefix + str(i)
-                self.bucket_util.drop_collection(self.cluster.master,
-                                                 self.bucket,
-                                                 self.scope_name,
-                                                 collection_name)
-                self.bucket.scopes[self.scope_name].collections.pop(
-                    collection_name)
-                self.num_collections -= 1
+            total_scopes = self.num_scopes
+
+            for scope in self.bucket.scopes.keys():
+                for collection in self.bucket.scopes[scope].collections.keys()[1:total_collections:2]:
+                    self.bucket_util.drop_collection(self.cluster.master,
+                                                     self.bucket,
+                                                     scope,
+                                                     collection)
+                    self.bucket.scopes[scope].collections.pop(
+                        collection)
+            self.num_collections = len(self.bucket.scopes[scope].collections.keys())
             self.bucket_util._wait_for_stats_all_buckets()
             self.final_items = self.final_items * (self.num_collections)/total_collections
             self.log.info("Expected items after dropping collections: {}".
@@ -1706,14 +1732,11 @@ class volume(BaseTestCase):
                                    delete_end=self.num_items*self.delete_perc/100,
                                    expire_start=0,
                                    expire_end=self.num_items*self.expiry_perc/100)
-                tasks_info = self.data_load(
-                    scope=self.scope_name,
-                    collections=self.bucket.scopes[self.scope_name].collections.keys())
+                task = self.data_load()
                 th = threading.Thread(target=self.crash_thread,
                                       kwargs={"graceful": False})
                 th.start()
-                for task in tasks_info:
-                    self.task_manager.get_task_result(task)
+                self.task_manager.get_task_result(task)
                 self.stop_crash = True
                 th.join()
                 if self.end_step == 16:
@@ -1738,28 +1761,26 @@ class volume(BaseTestCase):
                 self.delete_perc = 150
                 self.expiry_perc = 150
                 self.generate_docs(doc_ops="create;update;delete;expiry")
-                tasks_info = self.data_load(
-                    scope=self.scope_name,
-                    collections=self.bucket.scopes[self.scope_name].collections.keys())
+                task = self.data_load()
                 th = threading.Thread(target=self.crash_thread,
                                       kwargs={"graceful": False,
                                               "num_kills": 20})
                 th.start()
-                for task in tasks_info:
-                    self.task_manager.get_task_result(task)
+                self.task_manager.get_task_result(task)
                 self.stop_crash = True
                 th.join()
                 if self.end_step == 17:
                     exit(17)
             #######################################################################
-            for i in range(1, total_collections-1, 2):
-                collection_name = self.collection_prefix + str(i)
-                self.bucket_util.create_collection(self.cluster.master,
-                                                   self.bucket,
-                                                   self.scope_name,
-                                                   {"name": collection_name})
-                self.num_collections += 1
-                self.sleep(5)
+            for i in range(1, total_scopes-1, 2):
+                scope = self.scope_prefix + str(i)
+                for i in range(1, total_collections-1, 2):
+                    collection = self.collection_prefix + str(i)
+                    self.bucket_util.create_collection(self.cluster.master,
+                                                       self.bucket,
+                                                       self.scope,
+                                                       {"name": collection})
+                    self.sleep(0.5)
             self.bucket_util.flush_all_buckets(self.cluster.master)
             self.init_doc_params()
             self.sleep(300, "Iteration %s completed successfully !!!" % self.loop)
@@ -1777,7 +1798,7 @@ class volume(BaseTestCase):
         self.stop_rebalance = self.input.param("pause_rebalance", False)
         self.crashes = self.input.param("crashes", 20)
 
-        self.PrintStep("Step 1: Create %s items sequentially" % self.num_items)
+        self.PrintStep("Step 3: Create %s items sequentially" % self.num_items)
         self.expiry_perc = 100
         self.create_perc = 100
         self.update_perc = 100
@@ -2094,11 +2115,11 @@ class volume(BaseTestCase):
                            update_end=self.num_items*3
                            )
         self.perform_load(wait_for_load=False)
-        dgm = self.get_bucket_dgm(self.bucket)
-        self.sleep(300)
-        while self.dgm and dgm > self.dgm:
-            self.sleep(300)
-            dgm = self.get_bucket_dgm(self.bucket)
+        for bucket in self.bucket_util.buckets:
+            dgm = self.get_bucket_dgm(bucket)
+            while self.dgm and dgm > self.dgm:
+                self.sleep(300)
+                dgm = self.get_bucket_dgm(bucket)
         while self.loop <= self.iterations:
             ###################################################################
             self.PrintStep("Step 4.{}: Rebalance IN with Loading of docs".
@@ -2130,7 +2151,7 @@ class volume(BaseTestCase):
 
             self.PrintStep("Step 7.{}: Rebalance IN/OUT with Loading of docs".
                            format(self.loop))
-            rebalance_task = self.rebalance(nodes_in=1, nodes_out=2,
+            rebalance_task = self.rebalance(nodes_in=2, nodes_out=1,
                                             retry_get_process_num=3000)
             self.task.jython_task_manager.get_task_result(rebalance_task)
             self.assertTrue(rebalance_task.result, "Rebalance Failed")
@@ -2139,7 +2160,7 @@ class volume(BaseTestCase):
 
             self.PrintStep("Step 8.{}: Rebalance OUT/IN with Loading of docs".
                            format(self.loop))
-            rebalance_task = self.rebalance(nodes_in=2, nodes_out=1,
+            rebalance_task = self.rebalance(nodes_in=1, nodes_out=2,
                                             retry_get_process_num=3000)
             self.task.jython_task_manager.get_task_result(rebalance_task)
             self.assertTrue(rebalance_task.result, "Rebalance Failed")

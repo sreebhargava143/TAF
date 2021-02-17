@@ -576,11 +576,13 @@ class Dataverse_Util(BaseUtil):
                     analytics_scope = False
                 results.append(
                     self.create_dataverse(
-                        dataverse.name,
-                        if_not_exists=True,
-                        analytics_scope=analytics_scope
+                        dataverse.name, 
+                        if_not_exists=True, 
+                        analytics_scope=analytics_scope,
+                        timeout=cbas_spec.get("api_timeout",120), 
+                        analytics_timeout=cbas_spec.get("cbas_timeout",120)
+                        )
                     )
-                )
 
             return all(results)
         return True
@@ -1029,8 +1031,10 @@ class Link_Util(Dataverse_Util):
                                         properties=random.choice(
                                             link_spec.get("properties")))
                         no_of_external_links -= 1
-                if not self.create_link(link.properties,
-                                        create_if_not_exists=True):
+                if not self.create_link(
+                    link.properties, create_if_not_exists=True, 
+                    timeout=cbas_spec.get("api_timeout",120), 
+                    analytics_timeout=cbas_spec.get("cbas_timeout",120)):
                     results.append(False)
                 else:
                     dataverse.links[link.name] = link
@@ -1573,6 +1577,7 @@ class Dataset_Util(Link_Util):
     def wait_for_ingestion_all_datasets(self, bucket_util):
         def caller(job):
             return job[0](**job[1])
+
         self.refresh_dataset_item_count(bucket_util)
         jobs = Queue()
         results = []
@@ -1584,10 +1589,9 @@ class Dataset_Util(Link_Util):
                           {"dataset_names": [dataset.full_name],
                            "num_items": dataset.num_of_items}))
         self.run_jobs_in_parallel(caller, jobs, results, 15,
-                                               async_run=False,
-                                               consume_from_queue_func=None)
+                                  async_run=False,
+                                  consume_from_queue_func=None)
         return all(results)
-
 
     def validate_cbas_dataset_items_count(self, dataset_name, expected_count,
                                           expected_mutated_count=0,
@@ -1977,8 +1981,11 @@ class Dataset_Util(Link_Util):
                                     results.append(
                                         self.enable_analytics_from_KV(
                                             dataset_obj.full_kv_entity_name,
-                                            False, False, None, None, None, 120,
-                                            120))
+                                            False, False, None, None, None,
+                                            timeout=cbas_spec.get(
+                                                "api_timeout",120),
+                                            analytics_timeout=cbas_spec.get(
+                                                "cbas_timeout",120)))
                                 else:
                                     if isinstance(dataset_obj, CBAS_Collection):
                                         analytics_collection = True
@@ -1991,8 +1998,12 @@ class Dataset_Util(Link_Util):
                                             dataverse_name,
                                             False, False, None,
                                             dataset_obj.link_name, None, False,
-                                            None, None,
-                                            None, 120, 120,
+                                            None, None, None,
+                                            timeout=cbas_spec.get(
+                                                "api_timeout",120),
+                                            analytics_timeout=cbas_spec.get(
+                                                "cbas_timeout",120),
+                                            analytics_collection=
                                             analytics_collection))
                             else:
                                 results.append(
@@ -2018,9 +2029,11 @@ class Dataset_Util(Link_Util):
                                             "include"],
                                         dataset_obj.dataset_properties[
                                             "exclude"],
-                                        False, None, None, None, None, 120,
-                                        120))
-
+                                        False, None, None, None, None, 
+                                        timeout=cbas_spec.get(
+                                            "api_timeout",120),
+                                        analytics_timeout=cbas_spec.get(
+                                            "cbas_timeout",120)))
                             if results[-1]:
                                 dataverse.datasets[
                                     dataset_obj.name] = dataset_obj
@@ -2299,7 +2312,9 @@ class Dataset_Util(Link_Util):
 
     def get_datasets(self, retries=10):
         datasets_created = []
-        datasets_query = 'SELECT VALUE d.DataverseName || "." || d.DatasetName FROM Metadata.`Dataset` d WHERE d.DataverseName <> "Metadata"'
+        datasets_query = 'SELECT VALUE d.DataverseName || "." || ' \
+                         'd.DatasetName FROM Metadata.`Dataset` d WHERE ' \
+                         'd.DataverseName <> "Metadata"'
         while not datasets_created and retries:
             status, _, _, results, _ = self.execute_statement_on_cbas_util(
                 datasets_query, mode="immediate", timeout=300,
@@ -2308,7 +2323,7 @@ class Dataset_Util(Link_Util):
                 datasets_created = list(
                     map(lambda dv: dv.encode('utf-8'), results))
                 break
-            sleep(1, "Wait for atleast one dataset to be created")
+            sleep(12, "Wait for atleast one dataset to be created")
             retries -= 1
         return datasets_created
 
@@ -2595,8 +2610,9 @@ class Synonym_Util(Dataset_Util):
                         synonym.full_name, synonym.cbas_entity_full_name,
                         if_not_exists=False, validate_error_msg=False,
                         expected_error=None, username=None, password=None,
-                        timeout=120, analytics_timeout=120):
-                    results.append(False)
+                        timeout=cbas_spec.get("api_timeout",120),
+                        analytics_timeout=cbas_spec.get("cbas_timeout",120)):
+                        results.append(False)
                 else:
                     dataverse.synonyms[synonym.name] = synonym
                     results.append(True)
@@ -2893,9 +2909,11 @@ class Index_Util(Synonym_Util):
                         indexed_fields=index.indexed_fields,
                         dataset_name=index.full_dataset_name,
                         analytics_index=index.analytics_index,
-                        validate_error_msg=False, expected_error=None,
-                        username=None, password=None, timeout=120,
-                        analytics_timeout=120):
+                        validate_error_msg=False,
+                        expected_error=None,
+                        username=None, password=None, timeout=cbas_spec.get(
+                            "api_timeout",120),
+                        analytics_timeout=cbas_spec.get("cbas_timeout",120)):
                     results.append(False)
                 else:
                     dataset.indexes[index.name] = index
@@ -3660,7 +3678,9 @@ class CbasUtil(Index_Util):
         if len(remote_links) > 0:
             self.log.info("Connecting all remote Links")
             for link in remote_links:
-                if not self.connect_link(link.full_name):
+                if not self.connect_link(
+                    link.full_name, timeout=cbas_spec.get("api_timeout",120), 
+                    analytics_timeout=cbas_spec.get("cbas_timeout",120)):
                     results.append(False)
                 else:
                     results.append(True)
@@ -3679,9 +3699,11 @@ class CbasUtil(Index_Util):
             if len(internal_datasets) > 0:
                 self.log.info("Waiting for data to be ingested into datasets")
                 for dataset in internal_datasets:
-                    jobs.put((self.wait_for_ingestion_complete,
-                              {"dataset_names": [dataset.full_name],
-                               "num_items": dataset.num_of_items}))
+                    jobs.put((
+                        self.wait_for_ingestion_complete,
+                        {"dataset_names":[dataset.full_name],
+                         "num_items":dataset.num_of_items,
+                         "timeout":cbas_spec.get("api_timeout",120)}))
             self.run_jobs_in_parallel(consumer_func, jobs, results,
                                       cbas_spec["max_thread_count"],
                                       async_run=False,
@@ -3700,11 +3722,11 @@ class CbasUtil(Index_Util):
         return True, "Success"
 
     def delete_cbas_infra_created_from_spec(
-            self, continue_if_index_drop_fail=True,
-            continue_if_synonym_drop_fail=True,
-            continue_if_dataset_drop_fail=True,
-            continue_if_link_drop_fail=True,
-            continue_if_dataverse_drop_fail=True,
+            self, cbas_spec, expected_index_drop_fail=True,
+            expected_synonym_drop_fail=True,
+            expected_dataset_drop_fail=True,
+            expected_link_drop_fail=True,
+            expected_dataverse_drop_fail=True,
             delete_dataverse_object=True):
 
         results = list()
@@ -3729,31 +3751,30 @@ class CbasUtil(Index_Util):
         for index in self.list_all_index_objs():
             retry_func(
                 index, self.drop_cbas_index,
-                {"index_name": index.name,
-                 "dataset_name": index.full_dataset_name,
-                 "analytics_index": index.analytics_index}
-            )
-
+                {"index_name":index.name, "dataset_name":index.full_dataset_name,
+                 "analytics_index":index.analytics_index,
+                 "timeout":cbas_spec.get("api_timeout",120), 
+                 "analytics_timeout":cbas_spec.get("cbas_timeout",120)}
+                )
         if any(results):
-            if continue_if_index_drop_fail:
+            if expected_index_drop_fail:
                 print_failures("Secondary Indexes", results)
                 results = []
             else:
                 return False
-
         self.log.info("Dropping all the synonyms")
         for synonym in self.list_all_synonym_objs():
             retry_func(
                 synonym, self.drop_analytics_synonym,
-                {"synonym_full_name": synonym.full_name, "if_exists": True})
-
+                {"synonym_full_name":synonym.full_name, "if_exists":True,
+                 "timeout":cbas_spec.get("api_timeout",120), 
+                 "analytics_timeout":cbas_spec.get("cbas_timeout",120)})
         if any(results):
-            if continue_if_synonym_drop_fail:
+            if expected_synonym_drop_fail:
                 print_failures("Synonyms", results)
                 results = []
             else:
                 return False
-
         self.log.info("Dropping all the Datasets")
         for dataset in self.list_all_dataset_objs():
             dataset_name = dataset.full_name
@@ -3763,16 +3784,18 @@ class CbasUtil(Index_Util):
 
             if isinstance(dataset, CBAS_Collection):
                 retry_func(
-                    dataset, self.drop_dataset,
-                    {"dataset_name": dataset_name, "if_exists": True,
-                     "analytics_collection": True})
+                    dataset,self.drop_dataset,
+                    {"dataset_name":dataset_name, "if_exists":True, "analytics_collection":True,
+                     "timeout":cbas_spec.get("api_timeout",120), 
+                     "analytics_timeout":cbas_spec.get("cbas_timeout",120)})
             else:
                 retry_func(
-                    dataset, self.drop_dataset,
-                    {"dataset_name": dataset_name, "if_exists": True})
-
+                    dataset,self.drop_dataset,
+                    {"dataset_name":dataset_name, "if_exists":True,
+                     "timeout":cbas_spec.get("api_timeout",120), 
+                     "analytics_timeout":cbas_spec.get("cbas_timeout",120)})
         if any(results):
-            if continue_if_dataset_drop_fail:
+            if expected_dataset_drop_fail:
                 print_failures("Datasets", results)
                 results = []
             else:
@@ -3781,19 +3804,23 @@ class CbasUtil(Index_Util):
         self.log.info("Disconnecting and Dropping all the Links")
         for link in self.list_all_link_objs():
             retry_func(
-                link, self.disconnect_link, {"link_name": link.full_name})
-
+                link, self.disconnect_link,
+                {"link_name":link.full_name,
+                 "timeout":cbas_spec.get("api_timeout",120), 
+                 "analytics_timeout":cbas_spec.get("cbas_timeout",120)})
             try:
                 results.pop()
             except:
                 retry_func(
                     link, self.drop_link,
-                    {"link_name": link.full_name, "if_exists": True})
+                    {"link_name":link.full_name, "if_exists":True,
+                     "timeout":cbas_spec.get("api_timeout",120), 
+                     "analytics_timeout":cbas_spec.get("cbas_timeout",120)})
             else:
                 results.append(link.full_name)
 
         if any(results):
-            if continue_if_link_drop_fail:
+            if expected_link_drop_fail:
                 print_failures("Links", results)
                 results = []
             else:
@@ -3805,190 +3832,24 @@ class CbasUtil(Index_Util):
                 if isinstance(dataverse, CBAS_Scope):
                     retry_func(
                         dataverse, self.drop_dataverse,
-                        {"dataverse_name": dataverse.name, "if_exists": True,
-                         "analytics_scope": True,
-                         "delete_dataverse_obj": delete_dataverse_object})
+                        {"dataverse_name":dataverse.name, "if_exists":True,
+                         "analytics_scope":True, "delete_dataverse_obj":delete_dataverse_object,
+                         "timeout":cbas_spec.get("api_timeout",120), 
+                         "analytics_timeout":cbas_spec.get("cbas_timeout",120)})
                 else:
                     retry_func(
                         dataverse, self.drop_dataverse,
-                        {"dataverse_name": dataverse.name, "if_exists": True,
-                         "delete_dataverse_obj": delete_dataverse_object})
+                        {"dataverse_name":dataverse.name, "if_exists":True,
+                         "delete_dataverse_obj":delete_dataverse_object,
+                         "timeout":cbas_spec.get("api_timeout",120), 
+                         "analytics_timeout":cbas_spec.get("cbas_timeout",120)})
 
         if any(results):
-            if continue_if_dataverse_drop_fail:
+            if expected_dataverse_drop_fail:
                 print_failures("Dataverses", results)
             else:
                 return False
         return True
-
-
-class CreateDatasetsOnAllCollectionsTask(Task):
-    def __init__(self, bucket_util, cbas_util, cbas_name_cardinality=1,
-                 kv_name_cardinality=1, remote_datasets=False,
-                 creation_methods=None):
-        super(CreateDatasetsOnAllCollectionsTask, self).__init__(
-            "CreateDatasetsOnAllCollectionsTask")
-        self.bucket_util = bucket_util
-        self.cbas_name_cardinality = cbas_name_cardinality
-        self.kv_name_cardinality = kv_name_cardinality
-        self.remote_datasets = remote_datasets
-        if not creation_methods:
-            self.creation_methods = ["cbas_collection", "cbas_dataset",
-                                     "enable_cbas_from_kv"]
-        else:
-            self.creation_methods = creation_methods
-        self.cbas_util = cbas_util
-        if remote_datasets:
-            self.remote_link_objs = self.cbas_util.list_all_link_objs(
-                "couchbase")
-            self.creation_methods.remove("enable_cbas_from_kv")
-
-    def call(self):
-        self.start_task()
-        try:
-            for bucket in self.bucket_util.buckets:
-                if self.kv_name_cardinality > 1:
-                    for scope in self.bucket_util.get_active_scopes(bucket):
-                        for collection in self.bucket_util.get_active_collections(
-                                bucket, scope.name):
-                            self.init_dataset_creation(bucket, scope,
-                                                       collection)
-                else:
-                    scope = self.bucket_util.get_scope_obj(bucket, "_default")
-                    self.init_dataset_creation(bucket, scope,
-                                               self.bucket_util.get_collection_obj(
-                                                   scope, "_default"))
-            self.set_result(True)
-            self.complete_task()
-        except Exception as e:
-            self.test_log.error(e)
-            self.set_exception(e)
-        return self.result
-
-    def init_dataset_creation(self, bucket, scope, collection):
-        creation_method = random.choice(self.creation_methods)
-
-        if self.remote_datasets:
-            link_name = random.choice(self.remote_link_objs).full_name
-        else:
-            link_name = None
-
-        name = self.cbas_util.generate_name(name_cardinality=1)
-
-        if creation_method == "enable_cbas_from_kv":
-            enabled_from_KV = True
-            dataverse = Dataverse(bucket.name + "." + scope.name)
-            self.cbas_util.dataverses[dataverse.name] = dataverse
-            name = CBASHelper.format_name(collection.name)
-        else:
-            enabled_from_KV = False
-            if self.cbas_name_cardinality > 1:
-                dataverse = Dataverse(self.cbas_util.generate_name(
-                    self.cbas_name_cardinality - 1))
-            else:
-                dataverse = self.cbas_util.get_dataverse_obj("Default")
-
-        num_of_items = collection.num_items
-
-        if creation_method == "cbas_collection":
-            dataset_obj = CBAS_Collection(
-                name=name, dataverse_name=dataverse.name, link_name=link_name,
-                dataset_source="internal", dataset_properties={},
-                bucket=bucket, scope=scope, collection=collection,
-                enabled_from_KV=enabled_from_KV, num_of_items=num_of_items)
-        else:
-            dataset_obj = Dataset(
-                name=name, dataverse_name=dataverse.name,
-                dataset_source="internal", dataset_properties={},
-                bucket=bucket, scope=scope, collection=collection,
-                enabled_from_KV=enabled_from_KV, num_of_items=num_of_items,
-                link_name=link_name)
-        if not self.create_dataset(dataset_obj):
-            raise N1QLQueryException(
-                "Could not create dataset " + dataset_obj.name + " on " +
-                dataset_obj.dataverse_name)
-        dataverse.datasets[dataset_obj.full_name] = dataset_obj
-        self.cbas_util.dataverses[dataverse.name] = dataverse
-
-    def create_dataset(self, dataset):
-        dataverse_name = dataset.dataverse_name
-        if dataverse_name == "Default":
-            dataverse_name = None
-        if dataset.enabled_from_KV:
-            if self.kv_name_cardinality > 1:
-                return self.cbas_util.enable_analytics_from_KV(
-                    dataset.full_kv_entity_name, False, False, None, None,
-                    None, 120, 120)
-            else:
-                return self.cbas_util.enable_analytics_from_KV(
-                    dataset.get_fully_qualified_kv_entity_name(1), False,
-                    False, None, None, None, 120, 120)
-        else:
-            if isinstance(dataset, CBAS_Collection):
-                analytics_collection = True
-            elif isinstance(dataset, Dataset):
-                analytics_collection = False
-            if self.kv_name_cardinality > 1 and self.cbas_name_cardinality > 1:
-                return self.cbas_util.create_dataset(
-                    dataset.name, dataset.full_kv_entity_name, dataverse_name,
-                    False, False, None, dataset.link_name, None, False, None,
-                    None, None, 120, 120, analytics_collection)
-            elif self.kv_name_cardinality > 1 and \
-                    self.cbas_name_cardinality == 1:
-                return self.cbas_util.create_dataset(
-                    dataset.name, dataset.full_kv_entity_name, None, False,
-                    False, None, dataset.link_name, None, False, None, None,
-                    None, 120, 120, analytics_collection)
-            elif self.kv_name_cardinality == 1 and \
-                    self.cbas_name_cardinality > 1:
-                return self.cbas_util.create_dataset(
-                    dataset.name, dataset.get_fully_qualified_kv_entity_name(1),
-                    dataverse_name, False, False, None, dataset.link_name, None,
-                    False, None, None, None, 120, 120, analytics_collection)
-            else:
-                return self.cbas_util.create_dataset(
-                    dataset.name, dataset.get_fully_qualified_kv_entity_name(1),
-                    None, False, False, None, dataset.link_name, None, False,
-                    None, None, None, 120, 120, analytics_collection)
-
-
-class RunSleepQueryOnDatasetsTask(Task):
-    def __init__(self, num_queries, cbas_util, datasets=[],
-                 sleep_time=5000):
-        super(RunSleepQueryOnDatasetsTask, self).__init__(
-            "RunSleepQueryOnDatasetsTask")
-        self.query = "select sleep(count(*), {0}) from {1} where mutated>=0"
-        self.datasets = datasets
-        self.num_queries = num_queries
-        self.cbas_util = cbas_util
-        self.sleep_time = sleep_time
-
-    def call(self):
-        self.start_task()
-        if not self.datasets:
-            self.datasets = self.cbas_util.get_datasets()
-        if not self.datasets:
-            error_msg = "No datasets available to run query"
-            self.log.error(error_msg)
-            self.set_exception(N1QLQueryException(error_msg))
-            return
-        for _ in range(self.num_queries):
-            if self.datasets:
-                dataset = random.choice(self.datasets)
-                query = self.query.format(self.sleep_time,
-                                          CBASHelper.format_name(dataset))
-            else:
-                query = self.query
-            status, _, error, results, _ = \
-                self.cbas_util.execute_statement_on_cbas_util(
-                    query, timeout=300, analytics_timeout=300)
-            if status.encode('utf-8') != 'success':
-                self.log.error(str(error))
-                self.set_exception(N1QLQueryException(query))
-                return
-            self.log.info(query + "->" + str(results))
-        self.complete_task()
-        self.set_result(True)
 
 
 class CBASRebalanceUtil(object):
@@ -4014,8 +3875,6 @@ class CBASRebalanceUtil(object):
         self.cbas_util = cbas_util
 
         self.bucket_helper_obj = BucketHelper(self.cluster.master)
-        self.run_parallel_cbas_query = False
-        self.run_parallel_kv_query = False
         self.query_threads = list()
         self.durability_level = ""
 
@@ -4082,21 +3941,10 @@ class CBASRebalanceUtil(object):
             set(self.cluster.nodes_in_cluster) - set(servs_out))
         return rebalance_task
 
-    def start_parallel_queries(self):
-        statement = "SELECT COUNT (*) FROM {0};";
-        if self.run_parallel_kv_query:
-            n1ql_queries = list()
-            for bucket in self.bucket_util.buckets:
-                status, content = self.bucket_helper_obj.list_collections(
-                    bucket.name)
-                if status:
-                    content = json.loads(content)
-                    for scope in content["scopes"]:
-                        for collection in scope["collections"]:
-                            keyspace = CBASHelper.format_name(bucket.name,
-                                                              scope["name"],
-                                                              collection["name"])
-                            n1ql_queries.append(statement.format(keyspace))
+    def start_parallel_queries(self, run_kv_queries, run_cbas_queries,
+                          parallelism=3):
+        queries = ["SELECT COUNT (*) FROM {0};"]
+        if run_kv_queries:
             n1ql_helper = N1QLHelper(use_rest=True,
                                      buckets=self.bucket_util.buckets,
                                      n1ql_port=self.cluster.master.n1ql_port,
@@ -4104,27 +3952,22 @@ class CBASRebalanceUtil(object):
                                      server=self.cluster.master)
             self.n1ql_query_task = RunQueriesTask(
                 self.cluster.master,
-                n1ql_queries,
+                queries,
                 self.task.jython_task_manager,
                 n1ql_helper,
                 query_type="n1ql",
-                parallelism=CBASRebalanceUtil.no_of_parallel_queries,
-                run_infinitely=True)
+                parallelism=parallelism,
+                run_infinitely=True, is_prepared=False)
             self.task.jython_task_manager.add_new_task(self.n1ql_query_task)
-        if self.run_parallel_cbas_query:
-            datasets = self.cbas_util.list_all_dataset_objs()
-            cbas_queries = [
-                statement.format(CBASHelper.format_name(
-                    dataset.dataverse_name, dataset.name))
-                for dataset in datasets]
+        if run_cbas_queries:
             self.cbas_query_task = RunQueriesTask(
                 self.cluster.master,
-                cbas_queries,
+                queries,
                 self.task.jython_task_manager,
                 self.cbas_util,
                 query_type="cbas",
-                parallelism=CBASRebalanceUtil.no_of_parallel_queries,
-                run_infinitely=True)
+                parallelism=parallelism,
+                run_infinitely=True, is_prepared=False)
             self.task.jython_task_manager.add_new_task(self.cbas_query_task)
 
     def stop_parallel_queries(self):
@@ -4134,10 +3977,6 @@ class CBASRebalanceUtil(object):
         if hasattr(self, "n1ql_query_task"):
             self.log.info("Stopping N1QL queries")
             self.task.jython_task_manager.stop_task(self.n1ql_query_task)
-
-        # if self.query_threads:
-        #     for qthread in self.query_threads:
-        #         qthread.join()
 
     def set_retry_exceptions(self, doc_loading_spec):
         """
@@ -4153,6 +3992,17 @@ class CBASRebalanceUtil(object):
             retry_exceptions.append(SDKException.DurabilityImpossibleException)
         doc_loading_spec[MetaCrudParams.RETRY_EXCEPTIONS] = retry_exceptions
 
+    @staticmethod
+    def set_ignore_exceptions(doc_loading_spec):
+        """
+        Exceptions to be ignored.
+        Ignoring DocumentNotFoundExceptions because there could be race conditons
+        eg: reads or deletes before creates
+        """
+        ignore_exceptions = list()
+        ignore_exceptions.append(SDKException.DocumentNotFoundException)
+        doc_loading_spec[MetaCrudParams.IGNORE_EXCEPTIONS] = ignore_exceptions
+
     def wait_for_data_load_to_complete(self, task, skip_validations):
         self.task.jython_task_manager.get_task_result(task)
         if not skip_validations:
@@ -4165,6 +4015,9 @@ class CBASRebalanceUtil(object):
         doc_loading_spec = self.bucket_util.get_crud_template_from_package(
             doc_spec_name)
         self.set_retry_exceptions(doc_loading_spec)
+        self.set_ignore_exceptions(doc_loading_spec)
+        doc_loading_spec[MetaCrudParams.DURABILITY_LEVEL] = self.durability_level
+        doc_loading_spec[MetaCrudParams.SKIP_READ_SUCCESS_RESULTS] = skip_read_success_results
         doc_loading_spec[MetaCrudParams.DURABILITY_LEVEL] = \
             self.durability_level
         doc_loading_spec[MetaCrudParams.SKIP_READ_SUCCESS_RESULTS] = \
@@ -4176,7 +4029,10 @@ class CBASRebalanceUtil(object):
             self.task, self.cluster, self.bucket_util.buckets,
             doc_loading_spec, mutation_num=0, async_load=async_load)
         if not async_load:
-            return self.wait_for_data_load_to_complete(task, skip_validations)
+            if not skip_validations:
+                self.bucket_util.validate_doc_loading_results(task)
+            task.result
+        #     return self.wait_for_data_load_to_complete(task, skip_validations)
         return task
 
     def data_validation_collection(self, skip_validations=True,
