@@ -4031,8 +4031,7 @@ class CBASRebalanceUtil(object):
         if not async_load:
             if not skip_validations:
                 self.bucket_util.validate_doc_loading_results(task)
-            task.result
-        #     return self.wait_for_data_load_to_complete(task, skip_validations)
+            return task.result
         return task
 
     def data_validation_collection(self, skip_validations=True,
