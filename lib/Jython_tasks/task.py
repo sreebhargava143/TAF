@@ -5922,8 +5922,8 @@ class CreateDatasetsTask(Task):
     def init_dataset_creation(self, bucket, scope, collection):
         creation_method = random.choice(self.creation_methods)
         dataverses = list(filter(lambda dv: (self.ds_per_dv is None) or (len(
-            dv.datasets.keys()) < self.ds_per_dv)),
-                         self.cbas_util.dataverses.values())
+            dv.datasets.keys()) < self.ds_per_dv),
+                                 self.cbas_util.dataverses.values()))
         dataverse = None
         if dataverses:
             dataverse = random.choice(dataverses)
