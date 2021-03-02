@@ -17,15 +17,18 @@ import time
 class MagmaBaseTest(BaseTestCase):
     def setUp(self):
         super(MagmaBaseTest, self).setUp()
+        self.vbuckets = self.input.param("vbuckets", self.cluster_util.vbuckets)
         self.rest = RestConnection(self.cluster.master)
         self.bucket_ram_quota = self.input.param("bucket_ram_quota", None)
+        self.fragmentation = int(self.input.param("fragmentation", 50))
         self.check_temporary_failure_exception = False
         self.retry_exceptions = [SDKException.TimeoutException,
                                  SDKException.AmbiguousTimeoutException,
                                  SDKException.RequestCanceledException,
                                  SDKException.UnambiguousTimeoutException]
         self.ignore_exceptions = []
-
+        # Sets autocompaction at bucket level
+        self.autoCompactionDefined = str(self.input.param("autoCompactionDefined", "false")).lower()
         # Create Cluster
         self.rest.init_cluster(username=self.cluster.master.rest_username,
                                password=self.cluster.master.rest_password)
@@ -134,11 +137,6 @@ class MagmaBaseTest(BaseTestCase):
             self.log.debug("props== {}".format(props))
             update_bucket_props = True
 
-        self.fragmentation = int(self.input.param("fragmentation", 50))
-        if self.fragmentation != 50 and self.bucket_storage == Bucket.StorageBackend.magma:
-            props += ";magma_delete_frag_ratio=%s" % str(self.fragmentation/100.0)
-            update_bucket_props = True
-
         if update_bucket_props:
             self.bucket_util.update_bucket_props(
                     "backend", props,
@@ -149,6 +147,10 @@ class MagmaBaseTest(BaseTestCase):
         self.monitor_stats = ["doc_ops", "ep_queue_size"]
         if not self.ep_queue_stats:
             self.monitor_stats = ["doc_ops"]
+        #Disk usage before data load
+        self.disk_usage_before_loading = self.get_disk_usage(self.buckets[0],
+                                                 self.cluster.nodes_in_cluster)[0]
+        self.log.info("disk usage before loading {}".format(self.disk_usage_before_loading))
 
         # Doc controlling params
         self.key = 'test_docs'
@@ -183,7 +185,7 @@ class MagmaBaseTest(BaseTestCase):
 
         # Common test params
         self.test_itr = self.input.param("test_itr", 4)
-        self.update_itr = self.input.param("update_itr", 10)
+        self.update_itr = self.input.param("update_itr", 2)
         self.next_half = self.input.param("next_half", False)
         self.deep_copy = self.input.param("deep_copy", False)
         if self.active_resident_threshold < 100:
@@ -246,7 +248,9 @@ class MagmaBaseTest(BaseTestCase):
             ram_quota=self.bucket_ram_quota,
             replica=self.num_replicas,
             storage=self.bucket_storage,
-            eviction_policy=self.bucket_eviction_policy)
+            eviction_policy=self.bucket_eviction_policy,
+            autoCompactionDefined=self.autoCompactionDefined,
+            fragmentation_percentage=self.fragmentation)
 
     def _create_multiple_buckets(self):
         buckets_created = self.bucket_util.create_multiple_buckets(
@@ -257,7 +261,8 @@ class MagmaBaseTest(BaseTestCase):
             storage={"couchstore": self.standard_buckets - self.magma_buckets,
                      "magma": self.magma_buckets},
             eviction_policy=self.bucket_eviction_policy,
-            bucket_name=self.bucket_name)
+            bucket_name=self.bucket_name,
+            fragmentation_percentage=self.fragmentation)
         self.assertTrue(buckets_created, "Unable to create multiple buckets")
 
         for bucket in self.bucket_util.buckets:
@@ -283,6 +288,15 @@ class MagmaBaseTest(BaseTestCase):
         self.log.info("## Active Resident Threshold of {0} is {1} ##".format(
             self.buckets[0].name, dgm))
         super(MagmaBaseTest, self).tearDown()
+
+    def run_compaction(self, compaction_iterations=5):
+        for _ in range(compaction_iterations):
+            compaction_tasks = list()
+            for bucket in self.bucket_util.buckets:
+                compaction_tasks.append(self.task.async_compact_bucket(
+                    self.cluster.master, bucket))
+            for task in compaction_tasks:
+                self.task_manager.get_task_result(task)
 
     def validate_seq_itr(self):
         if self.dcp_services and self.num_collections == 1:
@@ -616,6 +630,22 @@ class MagmaBaseTest(BaseTestCase):
 
         return tasks_info
 
+    def get_bucket_dgm(self, bucket):
+        self.rest_client = BucketHelper(self.cluster.master)
+        count = 0
+        dgm = 100
+        while count < 5:
+            try:
+                dgm = self.rest_client.fetch_bucket_stats(
+                    bucket.name)["op"]["samples"]["vb_active_resident_items_ratio"][-1]
+                self.log.info("Active Resident Threshold of {0} is {1}".format(
+                    bucket.name, dgm))
+                return dgm
+            except Exception as e:
+                self.sleep(5, e)
+            count += 1
+        return dgm
+
     def get_magma_stats(self, bucket, servers=None, field_to_grep=None):
         magma_stats_for_all_servers = dict()
         servers = servers or self.cluster.nodes_in_cluster
@@ -658,6 +688,7 @@ class MagmaBaseTest(BaseTestCase):
             shell.disconnect()
         self.log.info("Disk usage stats for bucekt {} is below".format(bucket.name))
         self.log.info("Total Disk usage for kvstore is {}MB".format(kvstore))
+        self.get_bucket_dgm(bucket)
         self.log.debug("Total Disk usage for wal is {}MB".format(wal))
         self.log.debug("Total Disk usage for keyTree is {}MB".format(keyTree))
         self.log.debug("Total Disk usage for seqTree is {}MB".format(seqTree))
@@ -692,36 +723,42 @@ class MagmaBaseTest(BaseTestCase):
 
     def check_fragmentation_using_magma_stats(self, bucket, servers=None):
         result = dict()
-        stats = list()
+        time_end = time.time() + 60 * 5
         if servers is None:
             servers = self.cluster.nodes_in_cluster
         if type(servers) is not list:
             servers = [servers]
-        for server in servers:
-            fragmentation_values = list()
-            shell = RemoteMachineShellConnection(server)
-            output = shell.execute_command(
+        while time.time() < time_end:
+            stats = list()
+            for server in servers:
+                fragmentation_values = list()
+                shell = RemoteMachineShellConnection(server)
+                output = shell.execute_command(
                     "lscpu | grep 'CPU(s)' | head -1 | awk '{print $2}'"
                     )[0][0].split('\n')[0]
-            self.log.debug("machine: {} - core(s): {}\
-            ".format(server.ip, output))
-            for i in range(int(output)):
-                grep_field = "rw_{}:magma".format(i)
-                _res = self.get_magma_stats(
-                    bucket, [server],
-                    field_to_grep=grep_field)
-                fragmentation_values.append(
-                    float(_res[server.ip][grep_field][
-                        "Fragmentation"]))
-                stats.append(_res)
-            result.update({server.ip: fragmentation_values})
+                self.log.debug("machine: {} - core(s): {}\
+                ".format(server.ip, output))
+                for i in range(min(int(output), 64)):
+                    grep_field = "rw_{}:magma".format(i)
+                    _res = self.get_magma_stats(
+                        bucket, [server],
+                        field_to_grep=grep_field)
+                    fragmentation_values.append(
+                        float(_res[server.ip][grep_field][
+                            "Fragmentation"]))
+                    stats.append(_res)
+                result.update({server.ip: fragmentation_values})
+            res = list()
+            for value in result.values():
+                res.append(max(value))
+            if max(res) < float(self.fragmentation)/100:
+                self.log.info("magma stats fragmentation result {} \
+                ".format(result))
+                return True
         self.log.info("magma stats fragmentation result {} \
         ".format(result))
-        for value in result.values():
-            if max(value) > self.fragmentation/100:
-                self.log.info(stats)
-                return False
-        return True
+        self.log.info(stats)
+        return False
 
     def check_fragmentation_using_bucket_stats(self, bucket, servers=None):
         # Disabling the check for time being
@@ -731,17 +768,19 @@ class MagmaBaseTest(BaseTestCase):
             servers = self.cluster.nodes_in_cluster
         if type(servers) is not list:
             servers = [servers]
-        for server in servers:
-            frag_val = self.bucket_util.get_fragmentation_kv(
-                bucket, server)
-            self.log.debug("Current Fragmentation for node {} is {} \
-            ".format(server.ip, frag_val))
-            result.update({server.ip: frag_val})
+        time_end = time.time() + 60 * 5
+        while time.time() < time_end:
+            for server in servers:
+                frag_val = self.bucket_util.get_fragmentation_kv(
+                    bucket, server)
+                self.log.debug("Current Fragmentation for node {} is {} \
+                ".format(server.ip, frag_val))
+                result.update({server.ip: frag_val})
+            if max(result.values()) < self.fragmentation:
+                self.log.info("KV stats fragmentation values {}".format(result))
+                return True
         self.log.info("KV stats fragmentation values {}".format(result))
-        for value in result.values():
-            if value > self.fragmentation:
-                return False
-        return True
+        return False
 
     def get_fragmentation_upsert_docs_list(self):
         """
@@ -881,7 +920,7 @@ class MagmaBaseTest(BaseTestCase):
                         "lscpu | grep 'CPU(s)' | head -1 | awk '{print $2}'"
                         )[0][0].split('\n')[0]
             self.log.debug("machine: {} - core(s): {}".format(server.ip, shards))
-            for shard in range(int(shards)):
+            for shard in range(min(int(shards), 64)):
                 magma = magma_path.format(shard)
                 kvstores, _ = shell.execute_command("ls {} | grep kvstore".format(magma))
                 cmd = '/opt/couchbase/bin/magma_dump {}'.format(magma)
@@ -906,3 +945,38 @@ class MagmaBaseTest(BaseTestCase):
         shell = RemoteMachineShellConnection(server)
         result = shell.execute_command(cmd)[0]
         return result
+
+    def set_metadata_purge_interval(self, value,
+                                    buckets=[], node=None):
+        self.log.info("Changing the bucket properties by changing {0} to {1}".
+                      format("purge_interval", value))
+        if not buckets:
+            buckets = self.buckets
+        if node is None:
+            node = self.cluster.master
+        rest = RestConnection(node)
+
+        shell = RemoteMachineShellConnection(node)
+        shell.enable_diag_eval_on_non_local_hosts()
+        shell.disconnect()
+
+        for bucket in buckets:
+            cmd = '{ok, BC} = ns_bucket:get_bucket(' \
+                  '"%s"), BC2 = lists:keyreplace(purge_interval, ' \
+                  '1, BC, {purge_interval, %f})' \
+                  ', ns_bucket:set_bucket_config("%s", BC2).' \
+                  % (bucket.name, value, bucket.name)
+            rest.diag_eval(cmd)
+
+        # Restart Memcached in all cluster nodes to reflect the settings
+        for server in self.cluster_util.get_kv_nodes(master=node):
+            shell = RemoteMachineShellConnection(server)
+            shell.restart_couchbase()
+            shell.disconnect()
+
+        # Check bucket-warm_up after Couchbase restart
+        retry_count = 10
+        buckets_warmed_up = self.bucket_util.is_warmup_complete(buckets, retry_count)
+        if not buckets_warmed_up:
+            self.log.critical("Few bucket(s) not warmed up "
+                              "within expected time")

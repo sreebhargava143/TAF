@@ -575,6 +575,9 @@ class RemoteMachineShellConnection:
 
     def kill_indexer(self):
         return self.kill_process("indexer", "indexer", signum=9)
+
+    def kill_cbas(self):
+        return self.kill_process("cbas", "cbas", signum=9)
     
     def start_prometheus(self):
         return self.kill_process("prometheus", "prometheus", signum=18)
@@ -3642,7 +3645,7 @@ class RemoteMachineShellConnection:
             ip_type = "inet6 \K[0-9a-zA-Z:]"
         if info.type.lower() != 'windows':
             cmd = "ifconfig | grep -Po '{0}+'".format(ip_type)
-            o, r = self.execute_command_raw(cmd)
+            o, r = self.execute_command_raw_jsch(cmd)
         if ipv6_server:
             for x in range(len(o)):
                 o[x] = "[{0}]".format(o[x])

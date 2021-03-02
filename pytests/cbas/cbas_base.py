@@ -79,8 +79,6 @@ class CBASBaseTest(BaseTestCase):
         self.cbas_spec_name = self.input.param("cbas_spec", None)
 
         self._cb_cluster = self.get_clusters()
-        self._cb_cluster = self._cb_cluster[0] \
-            if len(self._cb_cluster) == 1 else self._cb_cluster
 
         self.expected_error = self.input.param("error", None)
 
@@ -90,11 +88,15 @@ class CBASBaseTest(BaseTestCase):
             'set_cbas_memory_from_available_free_memory', False)
         self.parallel_load_percent = int(self.input.param(
             "parallel_load_percent", 0))
+        self.cbas_kill_count = self.input.param("cbas_kill_count", 0)
+        self.memcached_kill_count = self.input.param("memcached_kill_count", 0)
+        self.tamper_links_count = self.input.param("tamper_links_count", 0)
         self.cbas_node = None
         services = None
         nodes_init = None
         # Single cluster support
-        if hasattr(self, "cluster"):
+        if len(self._cb_cluster) == 1:
+            self._cb_cluster = self._cb_cluster[0]
             self.cluster.nodes_in_cluster.extend([self.cluster.master])
             if self.services_init and self.nodes_init >= 3:
                 if len(self.cluster.servers) < self.nodes_init or \
@@ -176,7 +178,7 @@ class CBASBaseTest(BaseTestCase):
                         self.cbas_node.services)
                 self.cbas_util = CbasUtil(self.cluster.master, self.cbas_node)
                 self.cbas_util_v2 = CbasUtilV2(self.cluster.master,
-                                               self.cbas_node)
+                                               self.cbas_node, self.task)
                 if "cbas" in self.cluster.master.services:
                     self.cleanup_cbas()
                 if add_default_cbas_node:
@@ -223,7 +225,7 @@ class CBASBaseTest(BaseTestCase):
                     self.sample_bucket = \
                         self.sample_bucket_dict[self.cb_bucket_name]
 
-        else:
+        elif len(self._cb_cluster) > 1:
             # Multi Cluster Support
             for cluster in self._cb_cluster:
 
@@ -330,23 +332,28 @@ class CBASBaseTest(BaseTestCase):
                             self.cb_bucket_name]
 
                 cluster.bucket_util.add_rbac_user()
+
+        else:
+            self.fail("No cluster is available")
         self.log.info("=== CBAS_BASE setup was finished for test #{0} {1} ==="
                       .format(self.case_number, self._testMethodName))
 
     def tearDown(self):
-        if hasattr(self, "cluster"):
+        if len(self.get_clusters()) == 1:
             self.cbas_util.closeConn()
-        else:
+        elif len(self.get_clusters()) > 1:
             for cluster in self._cb_cluster:
                 if cluster.cbas_util:
                     cluster.cbas_util.closeConn()
         super(CBASBaseTest, self).tearDown()
 
     def cbas_logger(self, msg, type="INFO"):
-        if type == "INFO":
+        if type.upper() == "INFO":
             self.log.info("*" * 10 + msg + "*" * 10)
-        if type == "DEBUG":
+        if type.upper() == "DEBUG":
             self.log.debug("*" * 10 + msg + "*" * 10)
+        if type.upper() == "ERROR":
+            self.log.error("*" * 10 + msg + "*" * 10)
 
     def cleanup_cbas(self, cbas_util=None):
         """
